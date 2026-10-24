@@ -66,7 +66,7 @@ export async function verifyPassword(c: Context<AppEnv>, password: string): Prom
 
 export async function createAdmin(c: Context<AppEnv>, password: string): Promise<boolean> {
   const salt = randomToken(24);
-  const iterations = 210_000;
+  const iterations = 50_000;
   const passwordHash = await hashPassword(password, salt, iterations);
   const result = await c.env.DB.prepare(
     "INSERT OR IGNORE INTO admin_credentials (id, password_hash, salt, iterations, updated_at) VALUES (1, ?, ?, ?, ?)"
