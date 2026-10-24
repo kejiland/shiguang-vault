@@ -3,7 +3,7 @@ import { LayoutDashboard, Library, UploadCloud, Database, Palette, ScrollText, L
 import { api, setCsrfToken } from "../lib/api";
 import { getContext } from "../lib/context";
 import type { AdminView, Asset, Repository } from "../types";
-import { ArtMark } from "../components/Media";
+import { ArtMark, AssetLinkDialog } from "../components/Media";
 import { AdminOverview } from "./admin/Overview";
 import { AdminLibrary } from "./admin/Library";
 import { AdminUpload } from "./admin/Upload";
@@ -25,9 +25,13 @@ export function AdminShell({ initialView = "overview" }: { initialView?: AdminVi
   const [view, setView] = useState<AdminView>(initialView);
   const [menuOpen, setMenuOpen] = useState(false);
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [imageCount, setImageCount] = useState(0);
+  const [musicCount, setMusicCount] = useState(0);
+  const [counts, setCounts] = useState<Record<string, number>>({});
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [linkAsset, setLinkAsset] = useState<Asset | null>(null);
 
   useEffect(() => {
     document.title = "工作台 · 拾光储藏室";
@@ -44,12 +48,18 @@ export function AdminShell({ initialView = "overview" }: { initialView?: AdminVi
     setLoading(true);
     setError("");
     try {
-      const [assetData, repoData] = await Promise.all([
-        api<{ assets: Asset[]; total: number }>("/api/admin/assets?limit=200"),
-        api<{ repositories: Repository[] }>("/api/repos")
+      const [assetData, repoData, dashboardData, imageData, musicData] = await Promise.all([
+        api<{ assets: Asset[]; total: number }>("/api/admin/assets?limit=30"),
+        api<{ repositories: Repository[] }>("/api/repos"),
+        api<{ counts: Record<string, number> }>("/api/admin/dashboard"),
+        api<{ assets: Asset[]; total: number }>("/api/admin/assets?kind=image&limit=1"),
+        api<{ assets: Asset[]; total: number }>("/api/admin/assets?kind=music&limit=1")
       ]);
       setAssets(assetData.assets);
       setRepositories(repoData.repositories);
+      setCounts(dashboardData.counts);
+      setImageCount(imageData.total);
+      setMusicCount(musicData.total);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "数据加载失败");
     } finally {
@@ -67,14 +77,14 @@ export function AdminShell({ initialView = "overview" }: { initialView?: AdminVi
     if (loading) return <div className="loading-panel"><ArtMark /><span>正在整理你的储藏室…</span></div>;
     if (error) return <div className="error-panel"><h3>暂时无法打开工作台</h3><p>{error}</p><button type="button" className="button" onClick={load}>重新加载</button></div>;
     switch (view) {
-      case "overview": return <AdminOverview assets={assets} repositories={repositories} onNavigate={setView} />;
-      case "library": return <AdminLibrary assets={assets} repositories={repositories} onRefresh={load} />;
+      case "overview": return <AdminOverview assets={assets} counts={counts} imageCount={imageCount} musicCount={musicCount} repositories={repositories} onNavigate={setView} onGetLink={setLinkAsset} />;
+      case "library": return <AdminLibrary repositories={repositories} onRefresh={load} />;
       case "upload": return <AdminUpload repositories={repositories} onUploaded={load} />;
       case "repositories": return <AdminRepositories repositories={repositories} onRefresh={load} />;
       case "appearance": return <AdminAppearance repositories={repositories} />;
       case "logs": return <AdminLogs />;
     }
-  }, [view, loading, error, assets, repositories]);
+  }, [view, loading, error, assets, counts, imageCount, musicCount, repositories]);
 
   return (
     <div className="admin-shell">
@@ -113,6 +123,7 @@ export function AdminShell({ initialView = "overview" }: { initialView?: AdminVi
         </header>
         <div className="admin-content">{content}</div>
       </main>
+      <AssetLinkDialog asset={linkAsset} manageShares onClose={() => setLinkAsset(null)} />
     </div>
   );
 }

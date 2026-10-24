@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import type { AppEnv, AssetRow, RepositoryRow } from "../types";
+import type { AppEnv, AssetRow, RepositoryRow, ShareLinkRow } from "../types";
 import { getSettings, saveSettings } from "../lib/settings";
 import { assetJson, assetPath, inferKind, mimeFor, removeAsset, safeFilename, syncAssetMirror, syncRepository } from "../lib/media";
 import { testRepository, uploadFile } from "../lib/storage";
-import { encryptSecret, nowIso, uuid } from "../lib/crypto";
+import { decryptSecret, encryptSecret, nowIso, randomToken, sha256, uuid } from "../lib/crypto";
 import {
   changeAdminPassword, clearLoginFailures, clearSessionCookie, createAdmin, createSession, currentSession,
   isInitialized, mustChangePassword, registerLoginFailure, sameOrigin, throttleLogin, verifyPassword
@@ -136,7 +136,7 @@ adminRoutes.get("/api/admin/dashboard", async (c) => {
   ).all<RepositoryRow & { asset_count: number }>();
   return c.json({
     counts: counts ?? {},
-    recent: recent.results.map(assetJson),
+    recent: recent.results.map((row) => assetJson(row)),
     repositories: repos.results.map(publicRepo)
   });
 });
@@ -164,7 +164,7 @@ adminRoutes.get("/api/admin/assets", async (c) => {
      ${where} ORDER BY a.created_at DESC LIMIT ? OFFSET ?`
   ).bind(...bindings, limit, offset).all<AssetRow & { repo_label: string; repo_provider: string; mirror_synced: number; mirror_total: number }>();
   const total = await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM assets a ${where}`).bind(...bindings).first<{ count: number }>();
-  return c.json({ assets: rows.results.map(assetJson), total: Number(total?.count ?? 0) });
+  return c.json({ assets: rows.results.map((row) => assetJson(row)), total: Number(total?.count ?? 0) });
 });
 
 adminRoutes.get("/api/admin/assets/:id/mirrors", async (c) => {
@@ -173,6 +173,82 @@ adminRoutes.get("/api/admin/assets/:id/mirrors", async (c) => {
      FROM asset_mirrors m JOIN repositories r ON r.id = m.repo_id WHERE m.asset_id = ?`
   ).bind(c.req.param("id")).all();
   return c.json({ mirrors: rows.results });
+});
+
+const SHARE_DURATIONS: Record<string, number | null> = {
+  "7d": 7 * 24 * 60 * 60 * 1000,
+  "30d": 30 * 24 * 60 * 60 * 1000,
+  "1y": 365 * 24 * 60 * 60 * 1000,
+  permanent: null
+};
+
+function shareUrl(c: Context<AppEnv>, token: string): string {
+  return new URL(`/share/${token}`, new URL(c.req.url).origin).toString();
+}
+
+function shareJson(link: ShareLinkRow, token: string, origin: string) {
+  return {
+    id: link.id,
+    expiresAt: link.expires_at,
+    revokedAt: link.revoked_at,
+    createdAt: link.created_at,
+    url: new URL(`/share/${token}`, origin).toString()
+  };
+}
+
+adminRoutes.get("/api/admin/assets/:id/shares", async (c) => {
+  const asset = await c.env.DB.prepare("SELECT id FROM assets WHERE id = ?").bind(c.req.param("id")).first();
+  if (!asset) return c.json({ error: "作品不存在" }, 404);
+  const rows = await c.env.DB.prepare(
+    "SELECT * FROM share_links WHERE asset_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at DESC LIMIT 20"
+  ).bind(c.req.param("id"), nowIso()).all<ShareLinkRow>();
+  const origin = new URL(c.req.url).origin;
+  const shares = [];
+  for (const row of rows.results) {
+    const token = await decryptSecret(row.token_encrypted, c.env.ENCRYPTION_KEY);
+    if (token) shares.push(shareJson(row, token, origin));
+  }
+  return c.json({ shares });
+});
+
+adminRoutes.post("/api/admin/assets/:id/shares", async (c) => {
+  const session = c.get("session");
+  if (!session || !sameOrigin(c)) return c.json({ error: "请求来源无效" }, 403);
+  if (c.req.header("x-csrf-token") !== session.csrf_token) return c.json({ error: "CSRF 校验失败" }, 403);
+  const asset = await c.env.DB.prepare("SELECT id FROM assets WHERE id = ?").bind(c.req.param("id")).first();
+  if (!asset) return c.json({ error: "作品不存在" }, 404);
+  const body = await c.req.json<{ duration?: unknown }>().catch(() => ({} as { duration?: unknown }));
+  const durationKey = String(body.duration ?? "permanent");
+  if (!(durationKey in SHARE_DURATIONS)) return c.json({ error: "分享有效期无效" }, 400);
+  const duration = SHARE_DURATIONS[durationKey];
+  const token = randomToken(32);
+  const now = nowIso();
+  const row: ShareLinkRow = {
+    id: uuid(),
+    asset_id: c.req.param("id"),
+    token_hash: await sha256(token),
+    token_encrypted: await encryptSecret(token, c.env.ENCRYPTION_KEY ?? ""),
+    expires_at: duration === null ? null : new Date(Date.now() + duration).toISOString(),
+    revoked_at: null,
+    created_at: now
+  };
+  await c.env.DB.prepare(
+    "INSERT INTO share_links (id, asset_id, token_hash, token_encrypted, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)"
+  ).bind(row.id, row.asset_id, row.token_hash, row.token_encrypted, row.expires_at, row.created_at).run();
+  await audit(c, "asset.share_create", row.asset_id, { shareId: row.id, expiresAt: row.expires_at });
+  return c.json({ share: shareJson(row, token, new URL(c.req.url).origin) }, 201);
+});
+
+adminRoutes.delete("/api/admin/assets/:id/shares/:shareId", async (c) => {
+  const session = c.get("session");
+  if (!session || !sameOrigin(c)) return c.json({ error: "请求来源无效" }, 403);
+  if (c.req.header("x-csrf-token") !== session.csrf_token) return c.json({ error: "CSRF 校验失败" }, 403);
+  const result = await c.env.DB.prepare(
+    "UPDATE share_links SET revoked_at = ? WHERE id = ? AND asset_id = ? AND revoked_at IS NULL"
+  ).bind(nowIso(), c.req.param("shareId"), c.req.param("id")).run();
+  if (!Number(result.meta.changes ?? 0)) return c.json({ error: "分享链接不存在或已撤销" }, 404);
+  await audit(c, "asset.share_revoke", c.req.param("id"), { shareId: c.req.param("shareId") });
+  return c.json({ ok: true });
 });
 
 adminRoutes.post("/api/admin/assets", async (c) => {

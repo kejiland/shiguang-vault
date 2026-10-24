@@ -1,17 +1,19 @@
-import { ArrowRight, Database, Image, Music2, UploadCloud, AlertTriangle, CheckCircle2, RefreshCw } from "lucide-react";
+import { ArrowRight, Database, Image, Link2, Music2, UploadCloud, AlertTriangle, CheckCircle2, RefreshCw } from "lucide-react";
 import type { Asset, AdminView, Repository } from "../../types";
 import { formatDate } from "../../lib/format";
 
 type Props = {
   assets: Asset[];
+  counts: Record<string, number>;
+  imageCount: number;
+  musicCount: number;
   repositories: Repository[];
   onNavigate: (view: AdminView) => void;
+  onGetLink: (asset: Asset) => void;
 };
 
-export function AdminOverview({ assets, repositories, onNavigate }: Props) {
-  const images = assets.filter((asset) => asset.kind === "image");
-  const music = assets.filter((asset) => asset.kind === "music");
-  const mirrorFailures = assets.reduce((sum, asset) => sum + Math.max(0, asset.mirrorTotal - asset.mirrorSynced), 0);
+export function AdminOverview({ assets, counts, imageCount, musicCount, repositories, onNavigate, onGetLink }: Props) {
+  const mirrorFailures = Number(counts.mirror_failures ?? 0);
   const recent = assets.slice(0, 5);
   const gitlabRepos = repositories.filter((repo) => repo.provider === "gitlab");
   return (
@@ -29,13 +31,13 @@ export function AdminOverview({ assets, repositories, onNavigate }: Props) {
         <button className="stat-card" type="button" onClick={() => onNavigate("library")}>
           <span className="stat-card__icon"><Image size={20} /></span>
           <span className="stat-card__label">影像馆藏</span>
-          <strong>{images.length.toString().padStart(2, "0")}</strong>
+          <strong>{imageCount.toString().padStart(2, "0")}</strong>
           <span className="stat-card__meta">查看全部图片 <ArrowRight size={14} /></span>
         </button>
         <button className="stat-card stat-card--music" type="button" onClick={() => onNavigate("library")}>
           <span className="stat-card__icon"><Music2 size={20} /></span>
           <span className="stat-card__label">声音收藏</span>
-          <strong>{music.length.toString().padStart(2, "0")}</strong>
+          <strong>{musicCount.toString().padStart(2, "0")}</strong>
           <span className="stat-card__meta">查看全部音乐 <ArrowRight size={14} /></span>
         </button>
         <button className="stat-card stat-card--plain" type="button" onClick={() => onNavigate("repositories")}>
@@ -70,7 +72,7 @@ export function AdminOverview({ assets, repositories, onNavigate }: Props) {
                     <span>{asset.kind === "image" ? "影像" : asset.artist || "音乐"} · {asset.repoLabel}</span>
                   </div>
                   <span className="recent-item__date">{formatDate(asset.createdAt)}</span>
-                  <span className="tag tag--muted">{asset.kind === "image" ? "IMAGE" : "AUDIO"}</span>
+                  <div className="recent-item__actions"><button type="button" className="row-action" onClick={() => onGetLink(asset)} aria-label="获取链接" title="获取链接"><Link2 size={15} /></button><span className="tag tag--muted">{asset.kind === "image" ? "IMAGE" : "AUDIO"}</span></div>
                 </div>
               ))}
             </div>

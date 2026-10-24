@@ -43,6 +43,16 @@ export interface AssetRow {
   updated_at: string;
 }
 
+export interface ShareLinkRow {
+  id: string;
+  asset_id: string;
+  token_hash: string;
+  token_encrypted: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
 export interface SessionRow {
   id: string;
   token_hash: string;

@@ -3,6 +3,7 @@ import type { AppEnv, AssetRow, RepositoryRow } from "./types";
 import { getSettings, publicSettings } from "./lib/settings";
 import { assetJson, readAssetFile } from "./lib/media";
 import { currentSession } from "./lib/auth";
+import { sha256 } from "./lib/crypto";
 
 type AssetWithRepo = AssetRow & {
   repo_label: string;
@@ -82,7 +83,8 @@ app.get("/api/public/assets", async (c) => {
      ${where} ORDER BY a.created_at DESC LIMIT ? OFFSET ?`
   ).bind(...bindings, limit, offset).all<AssetWithRepo>();
   const total = await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM assets a ${where}`).bind(...bindings).first<{ count: number }>();
-  return c.json({ assets: rows.results.map(assetJson), total: Number(total?.count ?? 0) });
+  const origin = new URL(c.req.url).origin;
+  return c.json({ assets: rows.results.map((row) => assetJson(row, origin)), total: Number(total?.count ?? 0) });
 });
 
 app.get("/api/public/assets/:id", async (c) => {
@@ -109,6 +111,25 @@ app.get("/media/:id", async (c) => {
     return await readAssetFile(c.env, row, c.req.header("range"));
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "媒体读取失败" }, 502);
+  }
+});
+
+app.get("/share/:token", async (c) => {
+  const token = c.req.param("token");
+  if (!/^[\w-]{43}$/.test(token)) return c.text("分享链接无效", 404);
+  const link = await c.env.DB.prepare(
+    "SELECT * FROM share_links WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1"
+  ).bind(await sha256(token)).first<{ asset_id: string; expires_at: string | null }>();
+  if (!link) return c.text("分享链接不存在或已撤销", 404);
+  if (link.expires_at && new Date(link.expires_at).getTime() <= Date.now()) {
+    return c.text("分享链接已过期", 410);
+  }
+  const asset = await c.env.DB.prepare("SELECT * FROM assets WHERE id = ?").bind(link.asset_id).first<AssetRow>();
+  if (!asset) return c.text("媒体不存在", 404);
+  try {
+    return await readAssetFile(c.env, asset, c.req.header("range"), { publicShare: true });
+  } catch (error) {
+    return c.text(error instanceof Error ? error.message : "媒体读取失败", 502);
   }
 });
 

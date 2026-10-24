@@ -8,7 +8,8 @@
 		"binding": "ASSETS",
 		"run_worker_first": [
 			"/api/*",
-			"/media/*"
+			"/media/*",
+			"/share/*"
 		],
 		"not_found_handling": "single-page-application"
 	},

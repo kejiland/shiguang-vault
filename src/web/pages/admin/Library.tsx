@@ -1,33 +1,72 @@
-import { useMemo, useState } from "react";
-import { Download, Image as ImageIcon, CloudUpload, MoreHorizontal, Music2, Pencil, Search, Trash2, X, Check, LoaderCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Download, Image as ImageIcon, CloudUpload, Link2, MoreHorizontal, Music2, Pencil, Search, Trash2, X, Check, LoaderCircle } from "lucide-react";
 import type { Asset, Repository } from "../../types";
 import { api } from "../../lib/api";
 import { downloadUrl, formatBytes, formatDate, formatDuration } from "../../lib/format";
+import { Pagination } from "../../components/Pagination";
+import { AssetLinkDialog } from "../../components/Media";
+
+const PAGE_SIZE = 30;
 
 type Props = {
-  assets: Asset[];
   repositories: Repository[];
   onRefresh: () => Promise<void>;
 };
 
-export function AdminLibrary({ assets, repositories, onRefresh }: Props) {
+export function AdminLibrary({ repositories, onRefresh }: Props) {
   const [kind, setKind] = useState<"all" | "image" | "music">("all");
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [repoId, setRepoId] = useState("all");
+  const [page, setPage] = useState(1);
+  const [pageAssets, setPageAssets] = useState<Asset[]>([]);
+  const [pageTotal, setPageTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [reloadToken, setReloadToken] = useState(0);
+
   const [editing, setEditing] = useState<Asset | null>(null);
   const [deleting, setDeleting] = useState<Asset | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
+  const [linkAsset, setLinkAsset] = useState<Asset | null>(null);
 
-  const filtered = useMemo(() => assets.filter((asset) => {
-    if (kind !== "all" && asset.kind !== kind) return false;
-    if (repoId !== "all" && asset.repoId !== repoId) return false;
-    if (query) {
-      const needle = query.toLowerCase();
-      return `${asset.title} ${asset.filename} ${asset.artist ?? ""} ${asset.tags.join(" ")}`.toLowerCase().includes(needle);
-    }
-    return true;
-  }), [assets, kind, repoId, query]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 280);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [kind, repoId, debouncedQuery]);
+
+  useEffect(() => {
+    const request = new AbortController();
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String((page - 1) * PAGE_SIZE) });
+    if (kind !== "all") params.set("kind", kind);
+    if (repoId !== "all") params.set("repo", repoId);
+    if (debouncedQuery) params.set("q", debouncedQuery);
+    setLoading(true);
+    setLoadError("");
+    api<{ assets: Asset[]; total: number }>(`/api/admin/assets?${params.toString()}`, { signal: request.signal })
+      .then((data) => {
+        setPageAssets(data.assets);
+        setPageTotal(data.total);
+      })
+      .catch((cause) => {
+        if (cause instanceof Error && cause.name === "AbortError") return;
+        setLoadError(cause instanceof Error ? cause.message : "内容库加载失败");
+      })
+      .finally(() => {
+        if (!request.signal.aborted) setLoading(false);
+      });
+    return () => request.abort();
+  }, [debouncedQuery, kind, page, reloadToken, repoId]);
+
+  useEffect(() => {
+    const lastPage = Math.max(1, Math.ceil(pageTotal / PAGE_SIZE));
+    if (page > lastPage) setPage(lastPage);
+  }, [page, pageTotal]);
 
   async function mirror(asset: Asset) {
     setBusyId(asset.id);
@@ -65,7 +104,7 @@ export function AdminLibrary({ assets, repositories, onRefresh }: Props) {
     <div className="admin-page">
       <div className="admin-page__heading admin-page__heading--compact">
         <div><span className="eyebrow">YOUR COLLECTION</span><h1>内容库</h1><p>浏览、整理与维护所有已经收录的图片和音乐。</p></div>
-        <div className="heading-count"><strong>{assets.length}</strong><span>件馆藏</span></div>
+        <div className="heading-count"><strong>{pageTotal}</strong><span>件馆藏</span></div>
       </div>
 
       <section className="panel library-panel">
@@ -84,10 +123,13 @@ export function AdminLibrary({ assets, repositories, onRefresh }: Props) {
           </div>
         </div>
         {notice && <div className="notice-bar"><Check size={16} /><span>{notice}</span><button type="button" onClick={() => setNotice("")}><X size={15} /></button></div>}
-        {filtered.length ? (
+        {loadError && <div className="notice-bar notice-bar--error"><X size={16} /><span>{loadError}</span><button type="button" onClick={() => setReloadToken((value) => value + 1)}><X size={15} /></button></div>}
+        {loading && !pageAssets.length ? (
+          <div className="admin-empty admin-empty--large"><LoaderCircle className="spin" size={26} /><h3>正在读取内容库</h3><p>请稍候。</p></div>
+        ) : pageAssets.length ? (
           <div className="library-table">
             <div className="library-table__head"><span>作品</span><span>类型</span><span>仓库</span><span>备份</span><span>收录日期</span><span /></div>
-            {filtered.map((asset) => (
+            {pageAssets.map((asset) => (
               <div className="library-row" key={asset.id}>
                 <div className="library-row__asset">
                   <span className={`library-thumb ${asset.kind === "music" ? "is-music" : ""}`}>
@@ -102,7 +144,8 @@ export function AdminLibrary({ assets, repositories, onRefresh }: Props) {
                 </span>
                 <span className="library-row__date">{formatDate(asset.createdAt)}</span>
                 <div className="row-actions">
-                  <a className="row-action" href={downloadUrl(asset)} download aria-label="下载"><Download size={16} /></a>
+                  <button className="row-action" type="button" onClick={() => setLinkAsset(asset)} aria-label="获取链接" title="获取链接"><Link2 size={16} /></button>
+                  <a className="row-action" href={downloadUrl(asset)} download aria-label="下载" title="下载"><Download size={16} /></a>
                   <button className="row-action" type="button" onClick={() => mirror(asset)} disabled={busyId === asset.id} aria-label="同步备份">
                     {busyId === asset.id ? <LoaderCircle className="spin" size={16} /> : <CloudUpload size={16} />}
                   </button>
@@ -119,8 +162,10 @@ export function AdminLibrary({ assets, repositories, onRefresh }: Props) {
             <p>尝试更换筛选条件，或者前往「上传作品」添加新的收藏。</p>
           </div>
         )}
+        <Pagination page={page} total={pageTotal} pageSize={PAGE_SIZE} onPageChange={setPage} label="内容库" disabled={loading} />
       </section>
 
+      <AssetLinkDialog asset={linkAsset} manageShares onClose={() => setLinkAsset(null)} />
       {editing && <EditDialog asset={editing} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); setNotice("作品信息已更新"); await onRefresh(); }} />}
       {deleting && (
         <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDeleting(null); }}>

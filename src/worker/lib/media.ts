@@ -10,7 +10,7 @@ export type AssetRecord = AssetRow & {
   mirror_synced?: number;
 };
 
-export function assetJson(row: AssetRecord) {
+export function assetJson(row: AssetRecord, origin?: string | null) {
   let tags: string[] = [];
   try { tags = JSON.parse(row.tags) as string[]; } catch { tags = []; }
   return {
@@ -33,7 +33,7 @@ export function assetJson(row: AssetRecord) {
     coverUrl: row.cover_asset_id ? `/media/${row.cover_asset_id}` : row.cover_url ?? null,
     mirrorTotal: Number(row.mirror_total ?? 0),
     mirrorSynced: Number(row.mirror_synced ?? 0),
-    mediaUrl: `/media/${row.id}`,
+    mediaUrl: origin ? new URL(`/media/${row.id}`, origin).toString() : `/media/${row.id}`,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -252,14 +252,19 @@ export async function syncRepository(
   return { scanned: files.length, imported, mainRepo: true, removed };
 }
 
-export async function readAssetFile(env: Env, asset: AssetRow, range?: string | null): Promise<Response> {
+export async function readAssetFile(
+  env: Env,
+  asset: AssetRow,
+  range?: string | null,
+  options: { publicShare?: boolean } = {}
+): Promise<Response> {
   const repo = await env.DB.prepare("SELECT * FROM repositories WHERE id = ?").bind(asset.repo_id).first<RepositoryRow>();
   if (!repo) throw new Error("媒体所在仓库不存在");
   const response = await readFile(repo, env, asset.path);
   const contentType = asset.mime_type || response.headers.get("content-type") || "application/octet-stream";
   const headers = new Headers();
   headers.set("Content-Type", contentType);
-  headers.set("Cache-Control", "private, max-age=3600");
+  headers.set("Cache-Control", options.publicShare ? "public, max-age=60, must-revalidate" : "private, max-age=3600");
   headers.set("Accept-Ranges", "bytes");
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(asset.filename)}`);

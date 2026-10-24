@@ -1,24 +1,51 @@
 import { ArrowDown, ArrowUpRight, Image as ImageIcon, Link2, Music2, Play, Sparkles } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { getContext } from "../lib/context";
 import type { Asset, OverviewData, SiteSettings } from "../types";
-import { ArtMark, AudioController, EmptyState, ImageGrid, Lightbox } from "../components/Media";
+import { ArtMark, AssetLinkDialog, AudioController, EmptyState, ImageGrid, Lightbox } from "../components/Media";
+import { Pagination } from "../components/Pagination";
 
 type Tab = "images" | "music" | "about";
+type MediaKind = "image" | "music";
+
+const PAGE_SIZE: Record<MediaKind, number> = { image: 8, music: 6 };
+
+function mediaRequest(kind: MediaKind, page: number, query: string, tag: string | null) {
+  const params = new URLSearchParams({
+    kind,
+    limit: String(PAGE_SIZE[kind]),
+    offset: String((page - 1) * PAGE_SIZE[kind])
+  });
+  if (query.trim()) params.set("q", query.trim());
+  if (tag) params.set("tag", tag);
+  return `/api/public/assets?${params.toString()}`;
+}
 
 export function PublicSite({ setupMode = false }: { setupMode?: boolean }) {
   const context = getContext();
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [authState, setAuthState] = useState(context.auth);
-  const [assets, setAssets] = useState<Asset[]>([]);
+  const [assets, setAssets] = useState<Record<MediaKind, Asset[]>>({ image: [], music: [] });
+  const [totals, setTotals] = useState<Record<MediaKind, number>>({ image: 0, music: 0 });
+  const [pages, setPages] = useState<Record<MediaKind, number>>({ image: 1, music: 1 });
   const [tab, setTab] = useState<Tab>("images");
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [tag, setTag] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<Asset | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [linkAsset, setLinkAsset] = useState<Asset | null>(null);
+  const [loading, setLoading] = useState<Record<MediaKind, boolean>>({ image: true, music: false });
+  const [error, setError] = useState<Record<MediaKind, string>>({ image: "", music: "" });
   const settings = overview?.settings ?? context.settings;
+  const activeKind: MediaKind = tab === "music" ? "music" : "image";
+  const activeAssets = assets[activeKind];
+  const activeTotal = totals[activeKind];
+  const activePage = pages[activeKind];
+  const [tagCatalog, setTagCatalog] = useState<Record<MediaKind, string[]>>({ image: [], music: [] });
+  const allTags = tagCatalog[activeKind];
+  const imageCount = overview?.counts.image ?? 0;
+  const musicCount = overview?.counts.music ?? 0;
 
   useEffect(() => {
     document.title = settings.site_title;
@@ -26,37 +53,76 @@ export function PublicSite({ setupMode = false }: { setupMode?: boolean }) {
   }, [settings.site_title, settings.accent_color]);
 
   useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query), 280);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    if (setupMode) return;
     let cancelled = false;
-    setLoading(true);
-    Promise.all([
-      api<OverviewData>("/api/public/overview"),
-      api<{ assets: Asset[]; total: number }>(`/api/public/assets?kind=${tab === "images" ? "image" : "music"}&limit=200`)
-    ]).then(([overviewData, assetData]) => {
-      if (cancelled) return;
-      setOverview(overviewData);
-      setAssets(assetData.assets);
-      setError("");
-    }).catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : "加载失败"); })
-      .finally(() => { if (!cancelled) setLoading(false); });
+    api<OverviewData>("/api/public/overview").then((overviewData) => {
+      if (!cancelled) setOverview(overviewData);
+    }).catch((cause) => {
+      if (!cancelled) {
+        const message = cause instanceof Error ? cause.message : "加载失败";
+        setError({ image: message, music: message });
+      }
+    });
     return () => { cancelled = true; };
-  }, [tab, authState.authenticated]);
+  }, [authState.authenticated, setupMode]);
 
-  const filtered = useMemo(() => assets.filter((asset) => {
-    if (tag && !asset.tags.includes(tag)) return false;
-    if (!query.trim()) return true;
-    const needle = query.trim().toLowerCase();
-    return `${asset.title} ${asset.artist ?? ""} ${asset.album ?? ""} ${asset.tags.join(" ")}`.toLowerCase().includes(needle);
-  }), [assets, query, tag]);
+  useEffect(() => {
+    if (setupMode || (settings.site_visibility === "private" && !authState.authenticated)) return;
+    const request = new AbortController();
+    setLoading((current) => ({ ...current, [activeKind]: true }));
+    api<{ assets: Asset[]; total: number }>(mediaRequest(activeKind, activePage, debouncedQuery, tag), { signal: request.signal })
+      .then((data) => {
+        setAssets((current) => ({ ...current, [activeKind]: data.assets }));
+        setTotals((current) => ({ ...current, [activeKind]: data.total }));
+        if (!tag) {
+          setTagCatalog((current) => ({
+            ...current,
+            [activeKind]: data.assets.flatMap((asset) => asset.tags).filter((item, index, list) => list.indexOf(item) === index).slice(0, 12)
+          }));
+        }
+        setError((current) => ({ ...current, [activeKind]: "" }));
+      })
+      .catch((cause) => {
+        if (cause instanceof Error && cause.name === "AbortError") return;
+        setError((current) => ({ ...current, [activeKind]: cause instanceof Error ? cause.message : "加载失败" }));
+      })
+      .finally(() => {
+        if (!request.signal.aborted) setLoading((current) => ({ ...current, [activeKind]: false }));
+      });
+    return () => request.abort();
+  }, [activeKind, activePage, authState.authenticated, debouncedQuery, settings.site_visibility, setupMode, tag]);
 
-  const allTags = useMemo(() => [...new Set(assets.flatMap((asset) => asset.tags))].slice(0, 12), [assets]);
-  const imageCount = overview?.counts.image ?? 0;
-  const musicCount = overview?.counts.music ?? 0;
+  useEffect(() => {
+    const pageCount = Math.max(1, Math.ceil(activeTotal / PAGE_SIZE[activeKind]));
+    if (activePage > pageCount) setPages((current) => ({ ...current, [activeKind]: pageCount }));
+  }, [activeKind, activePage, activeTotal]);
 
   function go(tabName: Tab) {
     setTab(tabName);
     setTag(null);
     setQuery("");
+    setDebouncedQuery("");
     document.getElementById("collection")?.scrollIntoView({ behavior: "smooth" });
+  }
+
+  function changePage(kind: MediaKind, nextPage: number) {
+    setPages((current) => ({ ...current, [kind]: nextPage }));
+    document.getElementById("collection")?.scrollIntoView({ behavior: "smooth" });
+  }
+
+  function changeTag(nextTag: string | null) {
+    setTag(nextTag);
+    setPages((current) => ({ ...current, [activeKind]: 1 }));
+  }
+
+  function changeQuery(value: string) {
+    setQuery(value);
+    setPages((current) => ({ ...current, [activeKind]: 1 }));
   }
 
   if (setupMode) return <SetupScreen />;
@@ -100,11 +166,11 @@ export function PublicSite({ setupMode = false }: { setupMode?: boolean }) {
           </div>
           <div className="hero__composition" aria-hidden="true">
             <div className="hero__image hero__image--main">
-              {assets.find((asset) => asset.kind === "image") ? <img src={assets.find((asset) => asset.kind === "image")!.mediaUrl} alt="" /> : <div className="hero__placeholder"><ImageIcon size={40} /></div>}
+              {assets.image[0] ? <img src={assets.image[0].mediaUrl} alt="" /> : <div className="hero__placeholder"><ImageIcon size={40} /></div>}
               <span className="hero__caption">FRAGMENT / 01</span>
             </div>
             <div className="hero__image hero__image--secondary">
-              {assets.filter((asset) => asset.kind === "image")[1] ? <img src={assets.filter((asset) => asset.kind === "image")[1].mediaUrl} alt="" /> : <div className="hero__placeholder hero__placeholder--warm" />}
+              {assets.image[1] ? <img src={assets.image[1].mediaUrl} alt="" /> : <div className="hero__placeholder hero__placeholder--warm" />}
             </div>
             <div className="hero__stamp"><span>COLLECTED</span><strong>光<br />与<br />声</strong><span>EST. 2026</span></div>
             <div className="hero__vertical">A PRIVATE MUSEUM OF LIGHT &amp; SOUND · {settings.hero_eyebrow}</div>
@@ -128,28 +194,33 @@ export function PublicSite({ setupMode = false }: { setupMode?: boolean }) {
             </div>
             {tab !== "about" && (
               <div className="section-heading__side">
-                <span className="collection-count">{filtered.length} 件{tab === "images" ? "影像" : "声音"}收藏</span>
-                <label className="search-field search-field--public"><SearchIcon /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tab === "images" ? "搜索影像" : "搜索曲目或艺术家"} /></label>
+                <span className="collection-count">{activeTotal} 件{tab === "images" ? "影像" : "声音"}收藏</span>
+                <label className="search-field search-field--public"><SearchIcon /><input value={query} onChange={(event) => changeQuery(event.target.value)} placeholder={tab === "images" ? "搜索影像" : "搜索曲目或艺术家"} /></label>
               </div>
             )}
           </div>
 
           {tab !== "about" && allTags.length > 0 && (
-            <div className="tag-filter"><button className={!tag ? "is-active" : ""} type="button" onClick={() => setTag(null)}>全部</button>{allTags.map((item) => <button className={tag === item ? "is-active" : ""} type="button" key={item} onClick={() => setTag(item)}>{item}</button>)}</div>
+            <div className="tag-filter"><button className={!tag ? "is-active" : ""} type="button" onClick={() => changeTag(null)}>全部</button>{allTags.map((item) => <button className={tag === item ? "is-active" : ""} type="button" key={item} onClick={() => changeTag(item)}>{item}</button>)}</div>
           )}
 
-          {loading ? (
-            <div className="public-loading"><ArtMark /><span>正在打开藏品柜…</span></div>
-          ) : error ? (
-            <div className="public-error"><h3>暂时无法读取馆藏</h3><p>{error}</p></div>
-          ) : tab === "about" ? (
+          {tab === "about" ? (
             <AboutSection settings={settings} images={imageCount} music={musicCount} />
-          ) : filtered.length === 0 ? (
-            <EmptyState kind={tab === "images" ? "image" : "music"} title={tab === "images" ? "影像墙还空着" : "聆听室还很安静"} subtitle={tab === "images" ? "登录工作台，上传第一张值得被记住的照片。" : "把最近反复播放的旋律收藏进来，让这里拥有自己的声音。"} />
-          ) : tab === "images" ? (
-            <ImageGrid assets={filtered} allowDownload={settings.allow_download} onOpen={setLightbox} />
+          ) : loading[activeKind] ? (
+            <div className="public-loading"><ArtMark /><span>正在打开藏品柜…</span></div>
+          ) : error[activeKind] ? (
+            <div className="public-error"><h3>暂时无法读取馆藏</h3><p>{error[activeKind]}</p></div>
+          ) : activeAssets.length === 0 ? (
+            <EmptyState kind={activeKind} title={tab === "images" ? "没有找到影像" : "没有找到曲目"} subtitle={debouncedQuery || tag ? "试试更换搜索词或标签。" : tab === "images" ? "登录工作台，上传第一张值得被记住的照片。" : "把最近反复播放的旋律收藏进来，让这里拥有自己的声音。"} />
           ) : (
-            <AudioController assets={filtered} allowDownload={settings.allow_download} selectionKey={`${tag ?? "all"}:${query}`} />
+            <>
+              {tab === "images" ? (
+                <ImageGrid assets={activeAssets} allowDownload={settings.allow_download} onOpen={setLightbox} onGetLink={setLinkAsset} />
+              ) : (
+                <AudioController assets={activeAssets} allowDownload={settings.allow_download} selectionKey={`music-page-${activePage}-${tag ?? "all"}-${debouncedQuery}`} onGetLink={setLinkAsset} />
+              )}
+              <Pagination page={activePage} total={activeTotal} pageSize={PAGE_SIZE[activeKind]} onPageChange={(page) => changePage(activeKind, page)} label={tab === "images" ? "影像" : "音乐"} disabled={loading[activeKind]} />
+            </>
           )}
         </section>
       </main>
@@ -159,7 +230,8 @@ export function PublicSite({ setupMode = false }: { setupMode?: boolean }) {
         <p>{settings.footer_text}</p>
         <div className="site-footer__meta"><span>IMAGES &amp; SOUND BY <a href="/admin">CURATOR</a></span><a href="/admin">进入工作台 <ArrowUpRight size={13} /></a></div>
       </footer>
-      <Lightbox asset={lightbox} onClose={() => setLightbox(null)} allowDownload={settings.allow_download} />
+      <Lightbox asset={lightbox} onClose={() => setLightbox(null)} allowDownload={settings.allow_download} onGetLink={(asset) => { setLightbox(null); setLinkAsset(asset); }} />
+      <AssetLinkDialog asset={linkAsset} privateArchive={settings.site_visibility === "private"} manageShares={settings.site_visibility === "private" && authState.authenticated} onClose={() => setLinkAsset(null)} />
     </div>
   );
 }
@@ -239,7 +311,7 @@ function SetupScreen() {
     setBusy(true);
     setError("");
     try {
-      const response = await api<{ ok: boolean; csrfToken: string }>("/api/auth/setup", { method: "POST", body: JSON.stringify({ password }) });
+      await api<{ ok: boolean; csrfToken: string }>("/api/auth/setup", { method: "POST", body: JSON.stringify({ password }) });
       await context.refreshAuth();
       window.location.href = "/admin";
     } catch (cause) {
