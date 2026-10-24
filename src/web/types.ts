@@ -71,6 +71,7 @@ export interface OverviewData {
 export interface AuthState {
   authenticated: boolean;
   initialized: boolean;
+  mustChangePassword: boolean;
   csrfToken: string | null;
   expiresAt: string | null;
 }

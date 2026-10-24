@@ -64,12 +64,28 @@ export async function verifyPassword(c: Context<AppEnv>, password: string): Prom
   return constantTimeEqual(candidate, row.password_hash);
 }
 
+export async function mustChangePassword(c: Context<AppEnv>): Promise<boolean> {
+  const row = await c.env.DB.prepare(
+    "SELECT must_change_password FROM admin_credentials WHERE id = 1"
+  ).first<{ must_change_password: number }>();
+  return Boolean(row?.must_change_password);
+}
+
+export async function changeAdminPassword(c: Context<AppEnv>, password: string): Promise<void> {
+  const salt = randomToken(24);
+  const iterations = 50_000;
+  const passwordHash = await hashPassword(password, salt, iterations);
+  await c.env.DB.prepare(
+    "UPDATE admin_credentials SET password_hash = ?, salt = ?, iterations = ?, must_change_password = 0, updated_at = ? WHERE id = 1"
+  ).bind(passwordHash, salt, iterations, nowIso()).run();
+}
+
 export async function createAdmin(c: Context<AppEnv>, password: string): Promise<boolean> {
   const salt = randomToken(24);
   const iterations = 50_000;
   const passwordHash = await hashPassword(password, salt, iterations);
   const result = await c.env.DB.prepare(
-    "INSERT OR IGNORE INTO admin_credentials (id, password_hash, salt, iterations, updated_at) VALUES (1, ?, ?, ?, ?)"
+    "INSERT OR IGNORE INTO admin_credentials (id, password_hash, salt, iterations, must_change_password, updated_at) VALUES (1, ?, ?, ?, 1, ?)"
   ).bind(passwordHash, salt, iterations, nowIso()).run();
   return Number(result.meta.changes ?? 0) > 0;
 }

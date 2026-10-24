@@ -253,13 +253,13 @@ function SetupScreen() {
       <div className="auth-panel auth-panel--setup">
         <div className="auth-panel__brand"><ArtMark /><span>拾光储藏室</span></div>
         <span className="eyebrow">FIRST TIME SETUP</span>
-        <h1>为你的储藏室<br />设置一把钥匙。</h1>
-        <p>第一次使用需要创建管理员密码。它只用于进入后台，密码会经过 PBKDF2 哈希后保存。</p>
+        <h1>先设置一把<br />临时钥匙。</h1>
+        <p>这里设置的是首次登录用的临时密码。登录后系统会强制你换成自己的新密码，之后才能进入工作台。</p>
         <form onSubmit={submit}>
-          <label className="field"><span>管理员密码 <small>至少 8 位</small></span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} autoComplete="new-password" required autoFocus /></label>
-          <label className="field"><span>再次输入密码</span><input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} minLength={8} autoComplete="new-password" required /></label>
+          <label className="field"><span>临时密码 <small>至少 8 位</small></span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} autoComplete="new-password" required autoFocus /></label>
+          <label className="field"><span>再次输入临时密码</span><input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} minLength={8} autoComplete="new-password" required /></label>
           {error && <p className="form-error">{error}</p>}
-          <button className="button button--dark button--wide" type="submit" disabled={busy}>{busy ? "正在创建…" : "创建并进入工作台"}</button>
+          <button className="button button--dark button--wide" type="submit" disabled={busy}>{busy ? "正在创建…" : "创建临时密码"}</button>
         </form>
         <small className="auth-panel__note">无需云账号。后续可在「存储库」中连接 GitHub 与 GitLab。</small>
       </div>

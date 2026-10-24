@@ -11,7 +11,7 @@ import { AdminGate } from "./pages/AdminGate";
 export function App() {
   const [state, setState] = useState<{ loading: boolean; error: string; settings: SiteSettings; auth: AuthState }>({
     loading: true, error: "", settings: DEFAULT_SETTINGS,
-    auth: { authenticated: false, initialized: false, csrfToken: null, expiresAt: null }
+    auth: { authenticated: false, initialized: false, mustChangePassword: false, csrfToken: null, expiresAt: null }
   });
 
   useEffect(() => {

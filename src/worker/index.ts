@@ -112,12 +112,12 @@ app.get("/media/:id", async (c) => {
   }
 });
 
-app.all("/api/admin/*", async (c) => {
+app.all("/api/auth/*", async (c) => {
   const { adminRoutes } = await import("./routes/admin");
   return adminRoutes.fetch(c.req.raw, c.env, c.executionCtx);
 });
 
-app.all("/api/auth/*", async (c) => {
+app.all("/api/admin/*", async (c) => {
   const { adminRoutes } = await import("./routes/admin");
   return adminRoutes.fetch(c.req.raw, c.env, c.executionCtx);
 });

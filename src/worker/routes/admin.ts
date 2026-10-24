@@ -6,8 +6,8 @@ import { assetJson, assetPath, inferKind, mimeFor, removeAsset, safeFilename, sy
 import { testRepository, uploadFile } from "../lib/storage";
 import { encryptSecret, nowIso, uuid } from "../lib/crypto";
 import {
-  clearLoginFailures, clearSessionCookie, createAdmin, createSession, currentSession, isInitialized,
-  registerLoginFailure, sameOrigin, throttleLogin, verifyPassword
+  changeAdminPassword, clearLoginFailures, clearSessionCookie, createAdmin, createSession, currentSession,
+  isInitialized, mustChangePassword, registerLoginFailure, sameOrigin, throttleLogin, verifyPassword
 } from "../lib/auth";
 
 export const adminRoutes = new Hono<AppEnv>();
@@ -22,6 +22,7 @@ adminRoutes.get("/api/auth/me", async (c) => {
   return c.json({
     authenticated: Boolean(session),
     initialized: await isInitialized(c),
+    mustChangePassword: Boolean(session && await mustChangePassword(c)),
     csrfToken: session?.csrf_token ?? null,
     expiresAt: session?.expires_at ?? null
   });
@@ -56,6 +57,26 @@ adminRoutes.post("/api/auth/login", async (c) => {
   return c.json({ ok: true, csrfToken: session.csrf_token });
 });
 
+adminRoutes.post("/api/auth/change-password", async (c) => {
+  const session = c.get("session");
+  if (!session) return c.json({ error: "请先登录" }, 401);
+  if (!sameOrigin(c)) return c.json({ error: "请求来源无效" }, 403);
+  if (c.req.header("x-csrf-token") !== session.csrf_token) return c.json({ error: "CSRF 校验失败" }, 403);
+  const body = await c.req.json<{ currentPassword?: string; newPassword?: string }>().catch(() => ({} as { currentPassword?: string; newPassword?: string }));
+  const currentPassword = String(body.currentPassword ?? "");
+  const newPassword = String(body.newPassword ?? "");
+  if (newPassword.length < 12) return c.json({ error: "新密码至少需要 12 个字符" }, 400);
+  if (newPassword === currentPassword) return c.json({ error: "新密码不能与当前密码相同" }, 400);
+  if (!(await verifyPassword(c, currentPassword))) return c.json({ error: "当前密码错误" }, 401);
+  await changeAdminPassword(c, newPassword);
+  // Invalidate every existing session, then issue one fresh session to this client.
+  await c.env.DB.prepare("DELETE FROM sessions").run();
+  clearSessionCookie(c);
+  const nextSession = await createSession(c);
+  await audit(c, "admin.password_change", "admin", { forced: true });
+  return c.json({ ok: true, csrfToken: nextSession.csrf_token });
+});
+
 adminRoutes.post("/api/auth/logout", async (c) => {
   const session = c.get("session");
   if (session) await c.env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind(session.id).run();
@@ -63,13 +84,27 @@ adminRoutes.post("/api/auth/logout", async (c) => {
   return c.json({ ok: true });
 });
 
-adminRoutes.use("/api/admin/*", async (c, next) => {
+async function requireReadySession(c: Context<AppEnv>): Promise<Response | null> {
   if (!c.get("session")) return c.json({ error: "请先登录" }, 401);
+  if (await mustChangePassword(c)) return c.json({ error: "首次登录必须先修改密码", code: "PASSWORD_CHANGE_REQUIRED" }, 403);
+  return null;
+}
+
+adminRoutes.use("/api/admin/*", async (c, next) => {
+  const denied = await requireReadySession(c);
+  if (denied) return denied;
   await next();
 });
 
 adminRoutes.use("/api/repos/*", async (c, next) => {
-  if (!c.get("session")) return c.json({ error: "请先登录" }, 401);
+  const denied = await requireReadySession(c);
+  if (denied) return denied;
+  await next();
+});
+
+adminRoutes.use("/api/repos", async (c, next) => {
+  const denied = await requireReadySession(c);
+  if (denied) return denied;
   await next();
 });
 
