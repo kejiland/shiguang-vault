@@ -1,0 +1,37 @@
+{
+  "name": "shiguang-vault",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A private image and music vault backed by GitHub with optional GitLab mirrors, served on Cloudflare Workers.",
+  "scripts": {
+    "dev": "concurrently -k -n WEB,API -c cyan,magenta \"npm:dev:web\" \"npm:dev:api\"",
+    "dev:web": "vite",
+    "dev:api": "wrangler dev",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "db:migrate:local": "wrangler d1 migrations apply shiguang-vault --local",
+    "db:migrate:remote": "wrangler d1 migrations apply shiguang-vault --remote",
+    "deploy": "npm run build && wrangler deploy",
+    "check": "npm run typecheck && npm run build"
+  },
+  "dependencies": {
+    "hono": "^4.9.6",
+    "lucide-react": "^0.542.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-router-dom": "^7.8.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261024.1",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "concurrently": "^9.2.1",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.4",
+    "wrangler": "^4.33.2"
+  }
+}

@@ -1,0 +1,10 @@
+node_modules
+dist
+.wrangler
+.dev.vars
+.test-session.xml
+.visual-check-*
+.env
+.env.*
+.git
+*.log

@@ -1,0 +1,23 @@
+name: shiguang-vault
+
+services:
+  vault:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8790:8788"
+    environment:
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-local-test-encryption-key-change-before-deploy-32}
+    volumes:
+      - vault_state:/app/.wrangler/state
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8788/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  vault_state:
