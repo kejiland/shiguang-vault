@@ -57,16 +57,16 @@ type ShareDuration = "permanent" | "7d" | "30d" | "1y";
 type ShareLink = {
   id: string;
   url: string;
+  directUrl: string;
   expiresAt: string | null;
   createdAt: string;
 };
-
 function shareExpiryLabel(expiresAt: string | null): string {
   return expiresAt ? `有效期至 ${formatDate(expiresAt)}` : "永久有效";
 }
 
 export function AssetLinkDialog({ asset, privateArchive = false, manageShares = false, onClose }: AssetLinkDialogProps) {
-  const [copied, setCopied] = useState<"url" | "markdown" | null>(null);
+  const [copied, setCopied] = useState<"url" | "direct" | "markdown" | null>(null);
   const [error, setError] = useState("");
   const [duration, setDuration] = useState<ShareDuration>("permanent");
   const [shares, setShares] = useState<ShareLink[]>([]);
@@ -114,13 +114,14 @@ export function AssetLinkDialog({ asset, privateArchive = false, manageShares = 
   const currentAsset = asset;
   const selectedShare = shares.find((share) => share.id === selectedShareId) ?? shares[0] ?? null;
   const url = selectedShare?.url ?? absoluteMediaUrl(currentAsset);
-  const markdown = markdownFor(currentAsset, url);
+  const directUrl = selectedShare?.directUrl ?? absoluteMediaUrl(currentAsset);
+  const markdown = markdownFor(currentAsset, directUrl);
   const showLinkFields = !manageShares || Boolean(selectedShare);
 
-  async function copy(kind: "url" | "markdown") {
+  async function copy(kind: "url" | "direct" | "markdown") {
     setError("");
     try {
-      await copyText(kind === "url" ? url : markdown);
+      await copyText(kind === "markdown" ? markdown : kind === "direct" ? directUrl : url);
       setCopied(kind);
       window.setTimeout(() => setCopied(null), 1800);
     } catch (cause) {
@@ -211,13 +212,17 @@ export function AssetLinkDialog({ asset, privateArchive = false, manageShares = 
               <span>Markdown {asset.kind === "image" ? "图片嵌入" : "音乐链接"}</span>
               <div><textarea value={markdown} readOnly rows={3} onFocus={(event) => event.currentTarget.select()} /><button type="button" onClick={() => copy("markdown")} aria-label="复制 Markdown 链接">{copied === "markdown" ? <Check size={16} /> : <Clipboard size={16} />}<span>{copied === "markdown" ? "已复制" : "复制"}</span></button></div>
             </label>
-            <p className="link-dialog__hint">{asset.kind === "image" ? "图片使用 Markdown 图片语法，粘贴到支持 Markdown 的编辑器即可显示。" : "音乐使用 Markdown 普通链接语法，粘贴后可直接打开播放。"}</p>
+            <label className="link-field">
+              <span>独立文件链接</span>
+              <div><input value={directUrl} readOnly onFocus={(event) => event.currentTarget.select()} /><button type="button" onClick={() => copy("direct")} aria-label="复制独立文件链接">{copied === "direct" ? <Check size={16} /> : <Copy size={16} />}<span>{copied === "direct" ? "已复制" : "复制"}</span></button></div>
+            </label>
+            <p className="link-dialog__hint">{asset.kind === "image" ? "独立文件链接可直接在浏览器显示图片，也适合用于 Markdown 图片嵌入。" : "独立文件链接可直接在浏览器打开并播放，也适合用于 Markdown 和网页音频。"}</p>
           </>
         )}
         {error && <p className="form-error">{error}</p>}
         {showLinkFields && (
           <div className="dialog__actions">
-            <a className="button button--ghost" href={url} target="_blank" rel="noreferrer"><ExternalLink size={16} /> 打开原文件</a>
+            <a className="button button--ghost" href={directUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} /> 打开原文件</a>
             <button className="button button--accent" type="button" onClick={() => copy("markdown")}>{copied === "markdown" ? <Check size={16} /> : <Link2 size={16} />} {copied === "markdown" ? "已复制 Markdown" : "复制 Markdown"}</button>
           </div>
         )}

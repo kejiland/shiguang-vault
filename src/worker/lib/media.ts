@@ -259,6 +259,16 @@ export async function readAssetFile(
   const repo = await env.DB.prepare("SELECT * FROM repositories WHERE id = ?").bind(asset.repo_id).first<RepositoryRow>();
   if (!repo) throw new Error("媒体所在仓库不存在");
   const response = await readFile(repo, env, asset.path, range, asset.remote_sha);
+  return mediaResponse(response, asset, range, options);
+}
+
+
+async function mediaResponse(
+  response: Response,
+  asset: Pick<AssetRow, "filename" | "mime_type">,
+  range?: string | null,
+  options: { publicShare?: boolean } = {}
+): Promise<Response> {
   const contentType = asset.mime_type || response.headers.get("content-type") || "application/octet-stream";
   const headers = new Headers();
   headers.set("Content-Type", contentType);
@@ -266,6 +276,10 @@ export async function readAssetFile(
   headers.set("Accept-Ranges", "bytes");
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(asset.filename)}`);
+  if (options.publicShare) {
+    headers.set("Access-Control-Allow-Origin", "*");
+    headers.set("Cross-Origin-Resource-Policy", "cross-origin");
+  }
 
   if (range) {
     const upstreamRange = response.headers.get("content-range");

@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import type { AppEnv, AssetRow, RepositoryRow } from "./types";
 import { getSettings, publicSettings } from "./lib/settings";
 import { assetJson, readAssetFile } from "./lib/media";
@@ -114,9 +115,9 @@ app.get("/media/:id", async (c) => {
   }
 });
 
-app.get("/share/:token", async (c) => {
+async function serveShare(c: Context<AppEnv>): Promise<Response> {
   const token = c.req.param("token");
-  if (!/^[\w-]{43}$/.test(token)) return c.text("分享链接无效", 404);
+  if (!token || !/^[\w-]{43}$/.test(token)) return c.text("分享链接无效", 404);
   const link = await c.env.DB.prepare(
     "SELECT * FROM share_links WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1"
   ).bind(await sha256(token)).first<{ asset_id: string; expires_at: string | null }>();
@@ -127,11 +128,16 @@ app.get("/share/:token", async (c) => {
   const asset = await c.env.DB.prepare("SELECT * FROM assets WHERE id = ?").bind(link.asset_id).first<AssetRow>();
   if (!asset) return c.text("媒体不存在", 404);
   try {
+    // Both the legacy token-only URL and the filename-suffixed direct URL
+    // resolve to the same asset and enforce the same revocation/expiry rules.
     return await readAssetFile(c.env, asset, c.req.header("range"), { publicShare: true });
   } catch (error) {
     return c.text(error instanceof Error ? error.message : "媒体读取失败", 502);
   }
-});
+}
+
+app.get("/share/:token", serveShare);
+app.get("/share/:token/:filename", serveShare);
 
 app.all("/api/auth/*", async (c) => {
   const { adminRoutes } = await import("./routes/admin");

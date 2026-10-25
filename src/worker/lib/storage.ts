@@ -245,6 +245,7 @@ export async function readFile(repo: RepositoryRow, env: Env, path: string, rang
   return response;
 }
 
+
 export async function deleteFile(repo: RepositoryRow, env: Env, path: string, sha?: string | null, message = "Delete media"): Promise<void> {
   const fullPath = repoPath(repo, path);
   if (repo.provider === "github") {

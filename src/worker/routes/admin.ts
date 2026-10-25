@@ -184,15 +184,18 @@ const SHARE_DURATIONS: Record<string, number | null> = {
 
 function shareJson(link: ShareLinkRow, token: string, origin: string, filename?: string | null) {
   const suffix = filename ? `/${encodeURIComponent(filename)}` : "";
+  const url = new URL(`/share/${token}${suffix}`, origin).toString();
   return {
     id: link.id,
     expiresAt: link.expires_at,
     revokedAt: link.revoked_at,
     createdAt: link.created_at,
-    url: new URL(`/share/${token}${suffix}`, origin).toString()
+    url,
+    // A filename-suffixed URL is directly usable by browsers, Markdown and
+    // external media players while remaining protected by the share token.
+    directUrl: url
   };
 }
-
 adminRoutes.get("/api/admin/assets/:id/shares", async (c) => {
   const asset = await c.env.DB.prepare("SELECT id, filename FROM assets WHERE id = ?").bind(c.req.param("id")).first<{ id: string; filename: string }>();
   if (!asset) return c.json({ error: "作品不存在" }, 404);
