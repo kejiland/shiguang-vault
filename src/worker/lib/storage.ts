@@ -80,10 +80,20 @@ async function githubFetch(repo: RepositoryRow, env: Env, path: string, init: Re
   const token = await tokenFor(repo, env);
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${token}`);
-  headers.set("Accept", "application/vnd.github+json");
+  if (!headers.has("Accept")) headers.set("Accept", "application/vnd.github+json");
   headers.set("X-GitHub-Api-Version", "2022-11-28");
   headers.set("User-Agent", "Shiguang-Vault");
   return fetch(path, { ...init, headers });
+}
+
+async function githubBlobFetch(repo: RepositoryRow, env: Env, sha: string, range?: string | null): Promise<Response> {
+  const token = await tokenFor(repo, env);
+  const headers = new Headers({ Accept: "application/vnd.github.raw" });
+  headers.set("Authorization", `Bearer ${token}`);
+  headers.set("X-GitHub-Api-Version", "2022-11-28");
+  headers.set("User-Agent", "Shiguang-Vault");
+  if (range) headers.set("Range", range);
+  return fetch(githubApi(repo, `/git/blobs/${encodeURIComponent(sha)}`), { headers });
 }
 
 async function gitlabFetch(repo: RepositoryRow, env: Env, path: string, init: RequestInit = {}): Promise<Response> {
@@ -213,13 +223,16 @@ export async function uploadFile(
   return { sha: String(data.content_sha256 ?? data.last_commit_id ?? ""), size: bytes.length };
 }
 
-export async function readFile(repo: RepositoryRow, env: Env, path: string): Promise<Response> {
+export async function readFile(repo: RepositoryRow, env: Env, path: string, range?: string | null, sha?: string | null): Promise<Response> {
   const fullPath = repoPath(repo, path);
   if (repo.provider === "github") {
-    const response = await githubFetch(repo, env, githubApi(repo, `/contents/${encodePath(fullPath)}?ref=${encodeURIComponent(repo.branch)}`), {
-      headers: { Accept: "application/vnd.github.raw+json" }
-    });
+    if (!sha) throw new StorageError(`${repo.label} 缺少文件版本信息，请先同步仓库后再读取`, 409, "github");
+    const response = await githubBlobFetch(repo, env, sha, range);
     if (!response.ok) throw remoteError(repo, response.status, await safeJson(response));
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      throw new StorageError(`${repo.label} 返回了文件信息而不是文件内容，请检查 GitHub Token 权限`, 502, "github");
+    }
     return response;
   }
   const encodedPath = encodeURIComponent(fullPath);

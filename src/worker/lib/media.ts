@@ -69,9 +69,7 @@ export function mimeFor(filename: string, fallback = "application/octet-stream")
 }
 
 export function assetPath(kind: "image" | "music", filename: string): string {
-  const now = new Date();
-  const datePath = `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-  return `${kind === "image" ? "images" : "music"}/${datePath}/${uuid().slice(0, 8)}-${safeFilename(filename)}`;
+  return `${kind === "image" ? "images" : "music"}/${uuid().slice(0, 8)}-${safeFilename(filename)}`;
 }
 
 export async function upsertDiscoveredAsset(
@@ -103,7 +101,7 @@ export async function buildMirrorFile(
   target: RepositoryRow,
   asset: AssetRow
 ): Promise<{ sha: string }> {
-  const response = await readFile(source, env, asset.path);
+  const response = await readFile(source, env, asset.path, null, asset.remote_sha);
   const bytes = new Uint8Array(await response.arrayBuffer());
   const existing = await env.DB.prepare(
     "SELECT remote_sha FROM asset_mirrors WHERE asset_id = ? AND repo_id = ?"
@@ -260,7 +258,7 @@ export async function readAssetFile(
 ): Promise<Response> {
   const repo = await env.DB.prepare("SELECT * FROM repositories WHERE id = ?").bind(asset.repo_id).first<RepositoryRow>();
   if (!repo) throw new Error("媒体所在仓库不存在");
-  const response = await readFile(repo, env, asset.path);
+  const response = await readFile(repo, env, asset.path, range, asset.remote_sha);
   const contentType = asset.mime_type || response.headers.get("content-type") || "application/octet-stream";
   const headers = new Headers();
   headers.set("Content-Type", contentType);
@@ -270,6 +268,13 @@ export async function readAssetFile(
   headers.set("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(asset.filename)}`);
 
   if (range) {
+    const upstreamRange = response.headers.get("content-range");
+    if (response.status === 206 && upstreamRange) {
+      headers.set("Content-Range", upstreamRange);
+      const length = response.headers.get("content-length");
+      if (length) headers.set("Content-Length", length);
+      return new Response(response.body, { status: 206, headers });
+    }
     const bytes = new Uint8Array(await response.arrayBuffer());
     const match = /^bytes=(\d*)-(\d*)$/i.exec(range.trim());
     if (!match) {
