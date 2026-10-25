@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import type { AppEnv, AssetRow, RepositoryRow, ShareLinkRow } from "../types";
 import { getSettings, saveSettings } from "../lib/settings";
-import { assetJson, assetPath, inferKind, mimeFor, removeAsset, safeFilename, syncAssetMirror, syncRepository } from "../lib/media";
+import { assetJson, inferKind, mimeFor, removeAsset, safeFilename, syncAssetMirror, syncRepository, timestampFilename } from "../lib/media";
+import { parseBuffer } from "music-metadata";
 import { testRepository, uploadFile } from "../lib/storage";
 import { decryptSecret, encryptSecret, nowIso, randomToken, sha256, uuid } from "../lib/crypto";
 import {
@@ -108,6 +109,33 @@ adminRoutes.use("/api/repos", async (c, next) => {
   await next();
 });
 
+type ParsedAudioMetadata = {
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  duration: number | null;
+};
+
+async function parseAudioMetadata(bytes: Uint8Array, filename: string): Promise<ParsedAudioMetadata> {
+  try {
+    const metadata = await parseBuffer(bytes, { path: filename, mimeType: mimeFor(filename) }, { duration: true, skipCovers: true });
+    const duration = Number(metadata.format.duration);
+    return {
+      title: cleanMetadataText(metadata.common.title),
+      artist: cleanMetadataText(metadata.common.artist ?? metadata.common.artists?.join(" / ")),
+      album: cleanMetadataText(metadata.common.album),
+      duration: Number.isFinite(duration) && duration > 0 && duration < 86_400 ? duration : null
+    };
+  } catch {
+    return { title: null, artist: null, album: null, duration: null };
+  }
+}
+
+function cleanMetadataText(value: unknown): string | null {
+  const text = String(value ?? "").replace(/\0/g, "").trim().slice(0, 160);
+  return text || null;
+}
+
 async function audit(c: Context<AppEnv>, action: string, target: string | null, detail: unknown) {
   try {
     await c.env.DB.prepare("INSERT INTO audit_logs (action, target, detail, created_at) VALUES (?, ?, ?, ?)")
@@ -182,20 +210,21 @@ const SHARE_DURATIONS: Record<string, number | null> = {
   permanent: null
 };
 
-function shareJson(link: ShareLinkRow, token: string, origin: string, filename?: string | null) {
-  const suffix = filename ? `/${encodeURIComponent(filename)}` : "";
-  const url = new URL(`/share/${token}${suffix}`, origin).toString();
+function shareJson(link: ShareLinkRow, origin: string, filename: string) {
+  // Root file links are the public-facing format. The token is deliberately
+  // not embedded: private sites authorize the filename while any active share
+  // exists, and revoking the final share disables anonymous access again.
+  const directUrl = new URL(`/${encodeURIComponent(filename)}`, origin).toString();
   return {
     id: link.id,
     expiresAt: link.expires_at,
     revokedAt: link.revoked_at,
     createdAt: link.created_at,
-    url,
-    // A filename-suffixed URL is directly usable by browsers, Markdown and
-    // external media players while remaining protected by the share token.
-    directUrl: url
+    url: directUrl,
+    directUrl
   };
 }
+
 adminRoutes.get("/api/admin/assets/:id/shares", async (c) => {
   const asset = await c.env.DB.prepare("SELECT id, filename FROM assets WHERE id = ?").bind(c.req.param("id")).first<{ id: string; filename: string }>();
   if (!asset) return c.json({ error: "作品不存在" }, 404);
@@ -206,7 +235,7 @@ adminRoutes.get("/api/admin/assets/:id/shares", async (c) => {
   const shares = [];
   for (const row of rows.results) {
     const token = await decryptSecret(row.token_encrypted, c.env.ENCRYPTION_KEY);
-    if (token) shares.push(shareJson(row, token, origin, asset.filename));
+    if (token) shares.push(shareJson(row, origin, asset.filename));
   }
   return c.json({ shares });
 });
@@ -236,7 +265,7 @@ adminRoutes.post("/api/admin/assets/:id/shares", async (c) => {
     "INSERT INTO share_links (id, asset_id, token_hash, token_encrypted, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)"
   ).bind(row.id, row.asset_id, row.token_hash, row.token_encrypted, row.expires_at, row.created_at).run();
   await audit(c, "asset.share_create", row.asset_id, { shareId: row.id, expiresAt: row.expires_at });
-  return c.json({ share: shareJson(row, token, new URL(c.req.url).origin, asset.filename) }, 201);
+  return c.json({ share: shareJson(row, new URL(c.req.url).origin, asset.filename) }, 201);
 });
 
 adminRoutes.delete("/api/admin/assets/:id/shares/:shareId", async (c) => {
@@ -262,16 +291,25 @@ adminRoutes.post("/api/admin/assets", async (c) => {
   const repo = await c.env.DB.prepare("SELECT * FROM repositories WHERE id = ? AND enabled = 1").bind(repoId).first<RepositoryRow>();
   if (!repo) return c.json({ error: "请选择有效的目标仓库" }, 400);
   if (repo.provider === "gitlab" && repo.backup_of) return c.json({ error: "GitLab 备份仓库不能作为上传目标" }, 400);
-  const filename = safeFilename(file.name);
-  const kind = inferKind(filename);
+
+  const originalFilename = safeFilename(file.name);
+  const kind = inferKind(originalFilename);
   if (!kind) return c.json({ error: "仅支持常见图片与音乐格式" }, 415);
   const maxSize = kind === "image" ? 20 * 1024 * 1024 : 50 * 1024 * 1024;
   if (file.size > maxSize) return c.json({ error: `单个文件不能超过 ${kind === "image" ? "20" : "50"} MB` }, 413);
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const path = assetPath(kind, filename);
-  const title = String(form.get("title") ?? filename.replace(/\.[^.]+$/, "")).trim().slice(0, 160) || filename;
-  const artist = String(form.get("artist") ?? "").trim().slice(0, 120) || null;
-  const album = String(form.get("album") ?? "").trim().slice(0, 120) || null;
+  const audio = kind === "music" ? await parseAudioMetadata(bytes, originalFilename) : null;
+
+  // Generate the timestamp once so the D1 filename and repository path always match.
+  const filename = timestampFilename(originalFilename);
+  const path = `${kind === "image" ? "images" : "music"}/${filename}`;
+  const fallbackTitle = originalFilename.replace(/\.[^.]+$/, "");
+  const submittedTitle = String(form.get("title") ?? "").trim().slice(0, 160);
+  const submittedArtist = String(form.get("artist") ?? "").trim().slice(0, 120);
+  const submittedAlbum = String(form.get("album") ?? "").trim().slice(0, 120);
+  const title = submittedTitle || audio?.title || fallbackTitle;
+  const artist = submittedArtist || audio?.artist || null;
+  const album = submittedAlbum || audio?.album || null;
   const tagsInput = String(form.get("tags") ?? "");
   const tags = [...new Set(tagsInput.split(/[,，\s]+/).map((tag) => tag.trim()).filter(Boolean))].slice(0, 12);
   const result = await uploadFile(repo, c.env, path, bytes, `Upload ${filename}`);
@@ -282,7 +320,7 @@ adminRoutes.post("/api/admin/assets", async (c) => {
   const rawDuration = Number(form.get("duration") ?? 0);
   const width = kind === "image" && rawWidth > 0 && rawWidth < 100_000 ? Math.round(rawWidth) : null;
   const height = kind === "image" && rawHeight > 0 && rawHeight < 100_000 ? Math.round(rawHeight) : null;
-  const duration = kind === "music" && rawDuration > 0 && Number.isFinite(rawDuration) && rawDuration < 86_400 ? rawDuration : null;
+  const duration = kind === "music" ? (rawDuration > 0 && Number.isFinite(rawDuration) && rawDuration < 86_400 ? rawDuration : audio?.duration ?? null) : null;
   await c.env.DB.prepare(
     `INSERT INTO assets (id, kind, repo_id, path, filename, mime_type, size, remote_sha, title, artist, album, tags, width, height, duration_seconds, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`

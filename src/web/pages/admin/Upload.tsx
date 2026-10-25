@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Check, FileImage, FileMusic, Image as ImageIcon, LoaderCircle, Music2, UploadCloud, X } from "lucide-react";
 import type { Repository } from "../../types";
 import { api, uploadAsset } from "../../lib/api";
+import { parseBlob } from "music-metadata";
 import { formatBytes, formatDuration } from "../../lib/format";
 
 export function AdminUpload({ repositories, onUploaded }: { repositories: Repository[]; onUploaded: () => Promise<void> }) {
@@ -22,6 +23,7 @@ export function AdminUpload({ repositories, onUploaded }: { repositories: Reposi
   const [dragging, setDragging] = useState(false);
   const [result, setResult] = useState<"success" | "error" | null>(null);
   const [message, setMessage] = useState("");
+  const [metadataStatus, setMetadataStatus] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   const isMusic = file ? /\.(mp3|m4a|aac|wav|flac|ogg|opus)$/i.test(file.name) : false;
@@ -35,6 +37,9 @@ export function AdminUpload({ repositories, onUploaded }: { repositories: Reposi
     setWidth(null);
     setHeight(null);
     setDuration(null);
+    setArtist("");
+    setAlbum("");
+    setMetadataStatus("");
     const objectUrl = URL.createObjectURL(next);
     if (next.type.startsWith("image/")) {
       setPreview(objectUrl);
@@ -54,6 +59,22 @@ export function AdminUpload({ repositories, onUploaded }: { repositories: Reposi
       };
       audio.onerror = () => URL.revokeObjectURL(objectUrl);
       audio.src = objectUrl;
+
+      if (next.type.startsWith("audio/") || /\.(mp3|m4a|aac|wav|flac|ogg|opus)$/i.test(next.name)) {
+        setMetadataStatus("正在识别音乐信息…");
+        void parseBlob(next, { duration: true, skipCovers: true })
+          .then((metadata) => {
+            const detectedTitle = metadata.common.title?.trim();
+            const detectedArtist = (metadata.common.artist ?? metadata.common.artists?.join(" / "))?.trim();
+            const detectedAlbum = metadata.common.album?.trim();
+            if (detectedTitle) setTitle(detectedTitle);
+            if (detectedArtist) setArtist(detectedArtist);
+            if (detectedAlbum) setAlbum(detectedAlbum);
+            if (Number.isFinite(metadata.format.duration)) setDuration(metadata.format.duration ?? null);
+            setMetadataStatus(detectedTitle || detectedArtist ? "已自动识别歌名和作者，可在下方修改。" : "没有找到音乐标签，将使用原文件名。");
+          })
+          .catch(() => setMetadataStatus("没有找到音乐标签，将使用原文件名。"));
+      }
     }
   }
 
@@ -77,6 +98,7 @@ export function AdminUpload({ repositories, onUploaded }: { repositories: Reposi
       await uploadAsset(form, setProgress);
       setResult("success");
       setMessage("作品已存入仓库，并出现在展示站中。");
+      setMetadataStatus("");
       setFile(null);
       setPreview("");
       setTitle(""); setArtist(""); setAlbum(""); setTags("");
@@ -153,13 +175,14 @@ export function AdminUpload({ repositories, onUploaded }: { repositories: Reposi
           <label className="field"><span>保存到仓库</span><select value={repoId} onChange={(event) => setRepoId(event.target.value)} required>{eligible.map((repo) => <option key={repo.id} value={repo.id}>{repo.label} · {repo.provider === "github" ? "GitHub" : "GitLab"}{repo.isDefault ? " · 默认" : ""}</option>)}</select></label>
           <label className="field"><span>标题</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="给这件作品一个名字" required /></label>
           {isMusic && <div className="field-row"><label className="field"><span>艺术家</span><input value={artist} onChange={(event) => setArtist(event.target.value)} placeholder="艺术家或演唱者" /></label><label className="field"><span>专辑</span><input value={album} onChange={(event) => setAlbum(event.target.value)} placeholder="所属专辑" /></label></div>}
+          {isMusic && metadataStatus && <p className="form-footnote upload-metadata-status">{metadataStatus}</p>}
           <label className="field"><span>标签 <small>用逗号分隔，便于检索</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="例如：夜色, 城市, 安静" /></label>
           {busy && <div className="upload-progress"><div><span>正在写入远程仓库…</span><strong>{progress}%</strong></div><span className="progress-track"><span style={{ width: `${progress}%` }} /></span></div>}
           {result && <div className={`form-result ${result === "success" ? "is-success" : "is-error"}`}>{result === "success" ? <Check size={17} /> : <X size={17} />}<span>{message}</span></div>}
           <button className="button button--accent button--wide" type="submit" disabled={busy || !file || !repoId}>
             {busy ? <><LoaderCircle className="spin" size={18} /> 正在上传 {progress}%</> : <><UploadCloud size={18} /> 上传到仓库</>}
           </button>
-          <p className="form-footnote">上传时会在文件名前加入随机标识，避免同名覆盖。GitLab 备份可在内容库中手动同步。</p>
+          <p className="form-footnote">文件会统一以时间戳命名；音乐会自动读取歌名、作者和专辑，前端显示这些标签信息。GitLab 备份可在内容库中手动同步。</p>
         </section>
       </form>
     </div>

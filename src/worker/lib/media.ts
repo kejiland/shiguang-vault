@@ -68,8 +68,14 @@ export function mimeFor(filename: string, fallback = "application/octet-stream")
   return types[ext] ?? fallback;
 }
 
-export function assetPath(kind: "image" | "music", filename: string): string {
-  return `${kind === "image" ? "images" : "music"}/${uuid().slice(0, 8)}-${safeFilename(filename)}`;
+export function timestampFilename(filename: string, date = new Date()): string {
+  const extension = filename.toLowerCase().match(/\.[a-z0-9]+$/)?.[0] ?? "";
+  // Media names use China Standard Time (UTC+8), independent of the Worker runtime timezone.
+  const stamp = new Date(date.getTime() + 8 * 60 * 60 * 1000)
+    .toISOString()
+    .replace(/\D/g, "")
+    .slice(0, 17);
+  return `${stamp}${extension}`;
 }
 
 export async function upsertDiscoveredAsset(

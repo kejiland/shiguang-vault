@@ -4,7 +4,7 @@ import type { AppEnv, AssetRow, RepositoryRow } from "./types";
 import { getSettings, publicSettings } from "./lib/settings";
 import { assetJson, readAssetFile } from "./lib/media";
 import { currentSession } from "./lib/auth";
-import { sha256 } from "./lib/crypto";
+import { nowIso, sha256 } from "./lib/crypto";
 
 type AssetWithRepo = AssetRow & {
   repo_label: string;
@@ -115,6 +115,45 @@ app.get("/media/:id", async (c) => {
   }
 });
 
+async function serveFilename(c: Context<AppEnv>): Promise<Response> {
+  const filename = c.req.param("filename");
+  if (!filename || filename.includes("/") || filename.includes("\\")) return c.text("文件不存在", 404);
+
+  const settings = await getSettings(c);
+  let row: AssetRow | null;
+  if (settings.site_visibility === "public") {
+    row = await c.env.DB.prepare(
+      "SELECT * FROM assets WHERE lower(filename) = lower(?) ORDER BY created_at DESC LIMIT 1"
+    ).bind(filename).first<AssetRow>();
+  } else {
+    const session = await currentSession(c);
+    if (!session) {
+      // Root filenames are capability links in a private archive. Access is
+      // granted only while the asset has at least one unrevoked, unexpired share.
+      row = await c.env.DB.prepare(
+        `SELECT a.* FROM assets a
+         WHERE lower(a.filename) = lower(?)
+           AND EXISTS (
+             SELECT 1 FROM share_links s
+             WHERE s.asset_id = a.id
+               AND s.revoked_at IS NULL
+               AND (s.expires_at IS NULL OR s.expires_at > ?)
+           )
+         ORDER BY a.created_at DESC LIMIT 1`
+      ).bind(filename, nowIso()).first<AssetRow>();
+    } else {
+      row = await c.env.DB.prepare(
+        "SELECT * FROM assets WHERE lower(filename) = lower(?) ORDER BY created_at DESC LIMIT 1"
+      ).bind(filename).first<AssetRow>();
+    }
+  }
+  if (!row) return c.env.ASSETS.fetch(c.req.raw);
+  try {
+    return await readAssetFile(c.env, row, c.req.header("range"), { publicShare: true });
+  } catch (error) {
+    return c.text(error instanceof Error ? error.message : "媒体读取失败", 502);
+  }
+}
 async function serveShare(c: Context<AppEnv>): Promise<Response> {
   const token = c.req.param("token");
   if (!token || !/^[\w-]{43}$/.test(token)) return c.text("分享链接无效", 404);
@@ -136,6 +175,7 @@ async function serveShare(c: Context<AppEnv>): Promise<Response> {
   }
 }
 
+app.get("/:filename", serveFilename);
 app.get("/share/:token", serveShare);
 app.get("/share/:token/:filename", serveShare);
 

@@ -205,24 +205,20 @@ export function AssetLinkDialog({ asset, privateArchive = false, manageShares = 
         {showLinkFields && (
           <>
             <label className="link-field">
-              <span>{manageShares ? "公开访问链接" : "可访问链接"}</span>
-              <div><input value={url} readOnly onFocus={(event) => event.currentTarget.select()} /><button type="button" onClick={() => copy("url")} aria-label="复制可访问链接">{copied === "url" ? <Check size={16} /> : <Copy size={16} />}<span>{copied === "url" ? "已复制" : "复制"}</span></button></div>
-            </label>
-            <label className="link-field">
               <span>Markdown {asset.kind === "image" ? "图片嵌入" : "音乐链接"}</span>
               <div><textarea value={markdown} readOnly rows={3} onFocus={(event) => event.currentTarget.select()} /><button type="button" onClick={() => copy("markdown")} aria-label="复制 Markdown 链接">{copied === "markdown" ? <Check size={16} /> : <Clipboard size={16} />}<span>{copied === "markdown" ? "已复制" : "复制"}</span></button></div>
             </label>
             <label className="link-field">
-              <span>独立文件链接</span>
-              <div><input value={directUrl} readOnly onFocus={(event) => event.currentTarget.select()} /><button type="button" onClick={() => copy("direct")} aria-label="复制独立文件链接">{copied === "direct" ? <Check size={16} /> : <Copy size={16} />}<span>{copied === "direct" ? "已复制" : "复制"}</span></button></div>
+              <span>直接访问链接</span>
+              <div><input value={directUrl} readOnly onFocus={(event) => event.currentTarget.select()} /><button type="button" onClick={() => copy("direct")} aria-label="复制直接访问链接">{copied === "direct" ? <Check size={16} /> : <Copy size={16} />}<span>{copied === "direct" ? "已复制" : "复制"}</span></button></div>
             </label>
-            <p className="link-dialog__hint">{asset.kind === "image" ? "独立文件链接可直接在浏览器显示图片，也适合用于 Markdown 图片嵌入。" : "独立文件链接可直接在浏览器打开并播放，也适合用于 Markdown 和网页音频。"}</p>
+            <p className="link-dialog__hint">{asset.kind === "image" ? "链接直接以文件名访问，浏览器会显示图片，也可直接用于 Markdown 图片嵌入。" : "链接直接以文件名访问，浏览器会打开并播放音乐，也可用于 Markdown 和网页音频。"}</p>
           </>
         )}
         {error && <p className="form-error">{error}</p>}
         {showLinkFields && (
           <div className="dialog__actions">
-            <a className="button button--ghost" href={directUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} /> 打开原文件</a>
+            <a className="button button--ghost" href={directUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} /> 打开文件</a>
             <button className="button button--accent" type="button" onClick={() => copy("markdown")}>{copied === "markdown" ? <Check size={16} /> : <Link2 size={16} />} {copied === "markdown" ? "已复制 Markdown" : "复制 Markdown"}</button>
           </div>
         )}
