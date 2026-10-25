@@ -422,7 +422,13 @@ img { max-width: 100%; display: block; }
 .notice-bar > span { flex: 1; line-height: 1.45; }
 .notice-bar button { border: 0; background: transparent; color: inherit; display: flex; cursor: pointer; }
 .upload-layout { display: grid; grid-template-columns: minmax(320px,1.03fr) minmax(340px,.97fr); gap: 17px; }
-.upload-drop-panel { min-height: 480px; padding: 0; display: flex; }
+.upload-drop-panel { position: relative; min-height: 480px; padding: 0; display: flex; overflow: hidden; }
+.upload-drop-panel.is-dragging { border-color: var(--accent); }
+.upload-drop-overlay { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 32px; text-align: center; background: color-mix(in srgb, var(--paper) 92%, transparent); backdrop-filter: blur(5px); pointer-events: none; }
+.upload-drop-overlay::after { content: ""; position: absolute; inset: 14px; border: 1px dashed var(--accent); }
+.upload-drop-overlay > * { position: relative; z-index: 1; }
+.upload-drop-overlay > strong { margin-top: 8px; font-family: var(--serif); font-size: 1.3rem; font-weight: 400; }
+.upload-drop-overlay > p { margin: 0; color: var(--ink-soft); font-size: .66rem; }
 .upload-dropzone { border: 1px dashed rgba(25,27,24,.28); width: 100%; min-height: 478px; padding: 40px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; cursor: pointer; background: rgba(255,255,255,.12); transition: 180ms; }
 .upload-dropzone:hover, .upload-dropzone.is-dragging { background: rgba(255,255,255,.45); border-color: var(--accent); }
 .upload-dropzone__icon { width: 67px; height: 67px; border: 1px solid var(--line); border-radius: 50%; display: grid; place-items: center; margin-bottom: 27px; color: var(--accent); }

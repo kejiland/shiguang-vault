@@ -25,8 +25,50 @@ export function AdminUpload({ repositories, onUploaded }: { repositories: Reposi
   const [message, setMessage] = useState("");
   const [metadataStatus, setMetadataStatus] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const dragDepth = useRef(0);
 
   const isMusic = file ? /\.(mp3|m4a|aac|wav|flac|ogg|opus)$/i.test(file.name) : false;
+
+  function acceptFiles(files: FileList | null) {
+    const next = files?.[0];
+    if (next) choose(next);
+  }
+
+  function handleDragEnter(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepth.current += 1;
+    if (event.dataTransfer.types.includes("Files")) setDragging(true);
+  }
+
+  function handleDragOver(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer.types.includes("Files")) {
+      event.dataTransfer.dropEffect = "copy";
+      setDragging(true);
+    }
+  }
+
+  function handleDragLeave(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragging(false);
+  }
+
+  function handleDrop(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepth.current = 0;
+    setDragging(false);
+    acceptFiles(event.dataTransfer.files);
+  }
+
+  function handleDragEnd() {
+    dragDepth.current = 0;
+    setDragging(false);
+  }
 
   function choose(next: File) {
     if (preview) URL.revokeObjectURL(preview);
@@ -134,11 +176,26 @@ export function AdminUpload({ repositories, onUploaded }: { repositories: Reposi
       </div>
 
       <form className="upload-layout" onSubmit={submit}>
-        <section className="panel upload-drop-panel">
+        <section
+          className={`panel upload-drop-panel ${dragging ? "is-dragging" : ""}`}
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          onDragEnd={handleDragEnd}
+        >
           <input
             ref={inputRef} type="file" hidden accept="image/jpeg,image/png,image/gif,image/webp,image/avif,image/svg+xml,audio/mpeg,audio/mp4,audio/aac,audio/wav,audio/flac,audio/ogg"
-            onChange={(event) => { const next = event.target.files?.[0]; if (next) choose(next); }}
+            onChange={(event) => acceptFiles(event.target.files)}
           />
+          {dragging && (
+            <div className="upload-drop-overlay" aria-hidden="true">
+              <span className="upload-dropzone__icon"><UploadCloud size={28} /></span>
+              <span className="eyebrow">DROP TO REPLACE</span>
+              <strong>{file ? "松开即可替换当前文件" : "松开即可选择文件"}</strong>
+              <p>支持图片与音乐，单次拖入一个文件</p>
+            </div>
+          )}
           {file ? (
             <div className="upload-selected">
               <button type="button" className="upload-selected__preview" onClick={() => inputRef.current?.click()}>
@@ -155,11 +212,8 @@ export function AdminUpload({ repositories, onUploaded }: { repositories: Reposi
           ) : (
             <button
               type="button"
-              className={`upload-dropzone ${dragging ? "is-dragging" : ""}`}
+              className="upload-dropzone"
               onClick={() => inputRef.current?.click()}
-              onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={(event) => { event.preventDefault(); setDragging(false); const next = event.dataTransfer.files[0]; if (next) choose(next); }}
             >
               <span className="upload-dropzone__icon"><UploadCloud size={28} /></span>
               <span className="eyebrow">DROP YOUR MEMORY HERE</span>
