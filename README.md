@@ -106,21 +106,28 @@ docker compose down
 docker compose down -v
 ```
 
-## 配置 Cloudflare
+## 部署到 Cloudflare
 
-### 1. 登录 Wrangler
+本项目提供三条部署路径。首次部署推荐 **Workers Builds（Cloudflare 控制台连接 GitHub）**；已经能在本地登录 Wrangler 时可用命令行部署。
+
+| 方式 | 适合场景 | 触发方式 | 密钥保存位置 |
+| --- | --- | --- | --- |
+| Cloudflare Workers Builds | 希望推送后自动构建部署 | 连接 GitHub 后，推送 `main` | Cloudflare Secret |
+| GitHub Actions | 希望由 GitHub 记录构建与部署过程 | 在 Actions 页面手动触发 | GitHub Secrets |
+| 本机 Wrangler | 首次配置、调试或紧急发布 | 本地执行命令 | 本机 Wrangler |
+
+> 无论选哪种方式，都必须先创建 D1、替换 `wrangler.jsonc` 的占位值、执行数据库迁移，并设置 `ENCRYPTION_KEY`。`ENCRYPTION_KEY` 只能保存为 Worker Secret，不能写进 `wrangler.jsonc`、README 或 GitHub 仓库。
+
+### 部署前准备
+
+#### 1. 创建 D1 数据库
 
 ```powershell
 npx wrangler login
-```
-
-### 2. 创建 D1 数据库
-
-```powershell
 npx wrangler d1 create <your-d1-database-name>
 ```
 
-将命令返回的数据库 ID 填入 `wrangler.jsonc`：
+将命令返回的数据库 ID 写入 `wrangler.jsonc`：
 
 ```jsonc
 {
@@ -135,36 +142,96 @@ npx wrangler d1 create <your-d1-database-name>
 }
 ```
 
-> 仓库中的 `wrangler.jsonc` 使用占位值。不要把真实 D1 ID 提交到公开仓库。
+`binding` 必须保持为 `DB`，因为项目的迁移脚本通过这个绑定查找数据库。仓库默认值是占位符，不能直接用于生产部署。
 
-### 3. 设置加密密钥
+#### 2. 设置加密密钥
 
-`ENCRYPTION_KEY` 用于加密后台保存的 GitHub/GitLab Token。请使用密码管理器生成足够长的随机值，并作为 Worker Secret 保存：
+`ENCRYPTION_KEY` 用于加密后台保存的 GitHub/GitLab Token：
 
 ```powershell
 npx wrangler secret put ENCRYPTION_KEY
 ```
 
-不要把密钥写入 README、代码、截图、Issue 或提交历史。它必须长期保留；更换后，已有仓库 Token 将无法解密，需要重新填写。
+使用密码管理器生成足够长的随机值。首次创建 Worker 时可先执行一次 `npm run deploy`，再到 Cloudflare **Workers → 对应 Worker → Settings → Variables and Secrets** 添加 Secret；也可以先执行 `wrangler secret put`。密钥必须长期保留，更换后已有仓库 Token 将无法解密。
 
-### 4. 应用数据库迁移
+#### 3. 应用数据库迁移
+
+本地已登录 Wrangler 时：
 
 ```powershell
 npm run db:migrate:remote
 ```
 
-### 5. 构建并部署
+如果改用 Cloudflare Workers Builds，请在 Workers Builds 的 **Deploy command** 中配置远程迁移与部署，详见下文。不要同时在三个平台重复执行同一批迁移。
+
+### 方式一：Cloudflare Workers Builds（推荐）
+
+1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)，进入 **Workers & Pages**。
+2. 选择 **Create application → Continue with GitHub**，授权并选择 `shiguang-vault` 仓库。
+3. 选择生产分支 `main`，Worker 名称设为 `shiguang-vault`（或修改 `wrangler.jsonc` 的 `name` 后使用相同名称）。
+4. 构建配置：
+   - **Build command**：`npm run build`
+   - **Deploy command**：`npm run db:migrate:remote && npx wrangler deploy`
+5. 在 Worker 的 **Settings → Variables and Secrets** 新增 Secret：`ENCRYPTION_KEY`。不要把值提交到 GitHub。
+6. 保存并触发首次构建。构建日志确认迁移成功、Worker 部署成功后，访问 Workers 域名下的 `/setup` 创建管理员密码。
+7. 在 **Settings → Domains & Routes** 绑定自定义域名，并启用 HTTPS。
+
+Workers Builds 使用的配置文件仍是仓库中的 `wrangler.jsonc`。若 D1 ID 不能公开，请不要把真实 ID 直接提交到公开仓库；应使用私有部署仓库，或在 Cloudflare 构建环境中生成部署配置。此仓库默认保持占位值，适合先 Fork 到你自己的私有仓库再部署。
+
+### 方式二：GitHub Actions
+
+仓库包含 `.github/workflows/deploy.yml`，只支持 **手动触发**，不会在每次推送时自动发布。工作流会依次执行类型检查、构建、远程数据库迁移和 Worker 部署。
+
+#### 1. 创建 Cloudflare API Token
+
+在 Cloudflare Dashboard 的 **My Profile → API Tokens → Create Token** 创建自定义 Token。至少需要：
+
+- Workers Scripts：Edit
+- D1：Edit
+- Account Settings：Read（用于定位账号）
+- 如使用自定义域名：Workers Routes：Edit
+
+尽量只授权当前 Cloudflare 账号；不要使用 Global API Key。
+
+#### 2. 添加 GitHub Secrets
+
+在 GitHub 仓库进入 **Settings → Secrets and variables → Actions → New repository secret**，添加：
+
+- `CLOUDFLARE_API_TOKEN`：上一步创建的 Token
+- `CLOUDFLARE_ACCOUNT_ID`：Cloudflare Dashboard 右侧概览中的 Account ID
+
+`ENCRYPTION_KEY` 仍保存在 Cloudflare Worker Secret 中，不需要放进 GitHub Actions。
+
+#### 3. 可选：配置 production Environment
+
+工作流使用 `environment: production`。如需人工审批，在 GitHub **Settings → Environments** 创建 `production`，添加 Required reviewers；不创建也可以直接运行。
+
+#### 4. 手动运行
+
+进入 GitHub 仓库 **Actions → Deploy to Cloudflare Workers → Run workflow**，选择 `main` 后执行。首次运行会应用 D1 迁移并部署 Worker。
+
+工作流使用 `CLOUDFLARE_API_TOKEN` 和 `CLOUDFLARE_ACCOUNT_ID` 连接 Cloudflare，不会把密钥写进仓库。若 D1 ID 不希望公开，请使用私有部署仓库；公开仓库中的 `wrangler.jsonc` 应继续保留占位值。
+
+### 方式三：本机 Wrangler
+
+已在本机登录并完成 D1 配置时：
 
 ```powershell
 npm run check
+npm run db:migrate:remote
+npx wrangler secret put ENCRYPTION_KEY
 npm run deploy
 ```
 
-部署后访问 `/setup` 完成管理员初始化。
+随后访问 `/setup` 完成管理员初始化，并在 Cloudflare **Settings → Domains & Routes** 绑定自定义域名。
 
-### 6. 绑定自定义域名
+### 部署顺序与常见错误
 
-在 Cloudflare 控制台中进入该 Worker 的 **Settings → Domains & Routes**，添加并验证自己的域名。生产环境应启用 HTTPS。
+- **先迁移再部署**：首次部署前必须创建 D1 并应用迁移，否则应用会在访问数据库时失败。
+- **Secret 只设置一次**：`ENCRYPTION_KEY` 更换会导致已保存的仓库 Token 无法解密。
+- **不要提交真实 D1 ID**：公开仓库应使用占位值；生产部署应使用私有仓库或受控构建环境。
+- **域名不是部署必需项**：可先使用 `workers.dev` 验证 `/setup`、上传和分享，再绑定自定义域名。
+- **Actions 与 Workers Builds 二选一**：同时启用两套自动部署会造成重复构建和迁移。
 
 ## 连接 GitHub
 
@@ -280,6 +347,9 @@ npm run deploy           # 构建并部署到 Cloudflare
 - [ ] 已执行一次小规模 GitLab 备份并核对结果
 - [ ] 已绑定自定义域名并确认 HTTPS
 - [ ] 已确认仓库中没有真实域名、凭据、D1 ID 或数据库导出
+- [ ] 已选定使用 Workers Builds、GitHub Actions 或本机 Wrangler 之一
+- [ ] 已按所选部署方式配置 Cloudflare / GitHub 凭据
+- [ ] 已确认没有同时启用 Workers Builds 与 GitHub Actions 自动部署
 
 ## 参与贡献
 
