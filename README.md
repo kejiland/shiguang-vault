@@ -1,233 +1,301 @@
 # 拾光储藏室
 
-一个把**图片**和**音乐**放在一起收藏的私人云端储藏室。前端、接口和权限校验运行在 Cloudflare Workers；原始文件保存在自己的 GitHub 私有仓库，并可按年手动备份到多个 GitLab 仓库。
+一个开源、可自托管的**图片与音乐收藏站**。前端、API、权限校验和媒体代理运行在 Cloudflare Workers；原始文件保存在自己的 GitHub 私有仓库，并可手动备份到多个 GitLab 私有仓库。
 
-## 已实现
+> 这是一个需要自行部署和配置的开源项目，不提供公共演示站、公共上传空间或内置存储额度。
 
-- **图片与音乐分模块展示**：图片使用错落影像墙与大图查看；音乐使用唱片架、曲目表和固定播放器。首页保持精简，图片每页 8 张、音乐每页 6 首，图片与音乐各自独立翻页。
-- **多个 GitHub 主仓库**：可在后台添加、编辑、停用、指定默认上传仓库。
-- **多个 GitLab 备份仓库**：每个 GitLab 仓库绑定一个 GitHub 主仓库，上传新作品时不会重复出现在公共馆藏。
-- **手动年度备份**：在「存储库」中为某个主仓库执行“全量备份”。备份按小批次进行，适合一年集中维护一次，不会自动定时消耗 Cloudflare 请求额度。
-- **Cloudflare 同源代理**：浏览器只访问自己的站点；Worker 在服务端读取 GitHub/GitLab 文件并代理 `/media/:id`，不需要把访问令牌或私有仓库地址暴露给访客。
-- **后台配置**：站点标题、副标题、描述、主色、公开/私密访问、下载权限、页脚和存储库都由后台管理。
-- **公开分享链接**：可在前台或后台为单张图片、单首音乐生成无需登录的公开链接与 Markdown 链接。默认永久有效，也可选 7 天、30 天或 1 年；管理员可随时撤销。
-- **私密模式**：未登录访客只能看到登录入口；作品列表、媒体文件和完整站点文案都需要管理员会话。公开模式则允许访客浏览。
-- **分享与私密边界**：普通作品列表和 `/media/:id` 仍受站点访问模式保护。分享按钮生成根路径文件名链接（如 `https://<your-domain.example>/20261025123045123.jpg`），私有站点只有在作品存在未撤销、未过期的分享记录时才允许匿名读取该文件；旧的 `/share/:token` 链接继续兼容。链接等同“持有即可查看”，请勿公开转发敏感内容。
-- **安全基础**：管理员密码使用 PBKDF2 哈希；登录有频率限制；会话使用 HttpOnly Cookie；写操作校验同源请求与 CSRF；仓库 Token 使用 AES-GCM 加密后存入 D1。
-- **操作记录**：上传、编辑、删除、备份和站点设置等关键操作会写入后台记录。
+![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
+![GitHub](https://img.shields.io/badge/Storage-GitHub-181717?logo=github&logoColor=white)
 
-## 技术结构
+## 功能
+
+- **图片与音乐分模块展示**：图片使用影像墙和大图预览；音乐使用唱片架、曲目表和播放器。两类内容拥有独立的搜索、分页和布局。
+- **首页精简展示**：图片每页 8 张，音乐每页 6 首，分别独立翻页。
+- **多个 GitHub 主仓库**：后台可添加、编辑、停用和指定默认上传仓库。
+- **多个 GitLab 备份仓库**：每个备份库绑定一个 GitHub 主仓库；备份按需手动执行，适合年度归档。
+- **WebP 自动优化**：JPG、JPEG、PNG、BMP 在上传前由浏览器尝试转换为 WebP；转换失败或体积变大时保留原图。
+- **自动识别音乐信息**：读取音乐标题、艺术家、专辑和时长；展示层优先使用识别或手动填写的信息。
+- **公开分享链接**：可为单件作品生成永久或限期分享链接，并复制直接访问链接与 Markdown。分享可随时撤销。
+- **后台配置**：站点标题、副标题、描述、主色、公开/私密模式、下载权限、页脚、仓库和分享均由后台管理。
+- **Cloudflare 同源代理**：浏览器只访问本站；Worker 服务端读取 GitHub/GitLab 内容，不向前端暴露访问令牌和私有仓库地址。
+- **安全基础**：PBKDF2 密码哈希、登录限流、HttpOnly 会话 Cookie、同源与 CSRF 校验、AES-GCM 加密仓库令牌。
+- **操作审计**：上传、编辑、删除、备份和设置变更会写入操作记录。
+
+## 技术架构
 
 ```text
 浏览器
-  └─ Cloudflare Worker（页面 + API + 鉴权）
-       ├─ Cloudflare D1（索引、设置、仓库配置、操作记录）
-       ├─ GitHub API（主存储，多个私有仓库）
-       └─ GitLab API（手动备份，多个私有仓库）
+  └─ Cloudflare Worker（静态页面 + API + 鉴权 + 媒体代理）
+       ├─ Cloudflare D1（索引、设置、仓库配置、分享、操作记录）
+       ├─ GitHub API（主存储；可配置多个私有仓库）
+       └─ GitLab API（手动备份；可配置多个私有仓库）
 ```
 
-项目文件：
-
-- Worker 与 API：`src/worker/`
-- 展示站和工作台：`src/web/`
-- D1 表结构：`migrations/`
-- Cloudflare 配置：`wrangler.jsonc`
-- 本地 Docker 测试：`Dockerfile`、`docker-compose.yml`
-
-## 本地 Docker 测试
-
-Docker 只用于本机验收，**不是线上部署方式**。当前测试地址：
+主要目录：
 
 ```text
-http://127.0.0.1:8790
+src/web/          React 展示站与管理后台
+src/worker/       Cloudflare Worker、API、存储适配与鉴权
+migrations/       D1 数据库迁移
+scripts/          辅助脚本
+wrangler.jsonc    Cloudflare Worker 与 D1 配置
+Dockerfile        本地测试镜像
+docker-compose.yml 本地测试编排
 ```
 
-管理员密码：首次部署时通过 /setup 设置
+## 环境要求
 
-```text
-首次部署时通过 /setup 设置
+- Node.js 20 或更高版本
+- npm
+- Cloudflare 账号
+- 用于存放媒体的 GitHub 私有仓库
+- 可选：GitLab 账号与私有备份仓库
+- 可选：Docker，仅用于本地验收
+
+## 快速开始
+
+### 1. 安装依赖
+
+```bash
+npm install
 ```
 
-启动或重新构建：
+### 2. 启动本地开发环境
+
+复制开发环境变量示例，并按需修改：
+
+```bash
+cp .dev.vars.example .dev.vars
+npm run dev
+```
+
+Windows PowerShell：
 
 ```powershell
-cd E:\储存柜
+Copy-Item .dev.vars.example .dev.vars
+npm run dev
+```
+
+开发服务器会同时启动 Vite 前端与 Wrangler 本地 Worker。具体地址以终端输出为准。
+
+### 3. 初始化本地数据库
+
+如本地尚未应用迁移：
+
+```bash
+npm run db:migrate:local
+```
+
+打开本地站点进入 `/setup`，创建管理员密码。首次登录后系统会要求设置新密码；部署时请使用独立、强随机密码。
+
+### 4. 使用 Docker 测试
+
+```bash
 docker compose up -d --build
 docker compose ps
 ```
 
-查看日志与停止：
+默认测试端口为 `8790`。Docker 仅用于本机测试，不是线上生产部署方式。
 
-```powershell
+查看日志和停止服务：
+
+```bash
 docker compose logs -f vault
 docker compose down
 ```
 
-Docker 会把测试数据库保存在名为 `shiguang-vault_vault_state` 的卷中，重建容器不会丢失。若要彻底回到“首次设置”状态，可删除这个测试卷；这会清空本地测试数据，请先确认不需要保留：
+若要清空本地测试数据：
 
-```powershell
+```bash
 docker compose down -v
 ```
 
-本地 `.env.docker.example` 只给出测试用示例值。正式环境的 `ENCRYPTION_KEY` 必须单独生成且妥善保管；一旦更换，已保存的仓库 Token 将无法解密，需要重新填写。
+## 配置 Cloudflare
 
-## 正式部署到 Cloudflare
+### 1. 登录 Wrangler
 
-以下命令在项目目录 `E:\储存柜` 中执行，需要 Node.js 20 或更高版本。
-
-### 1. 登录 Cloudflare
-
-```powershell
+```bash
 npx wrangler login
 ```
 
 ### 2. 创建 D1 数据库
 
-```powershell
-npx wrangler d1 create shiguang-vault
+```bash
+npx wrangler d1 create <your-d1-database-name>
 ```
 
-命令会返回真实的 `database_id`。打开 `wrangler.jsonc`，把下面这行占位值替换成返回的 ID：
+将命令返回的数据库 ID 填入 `wrangler.jsonc`：
 
 ```jsonc
-"database_id": "00000000-0000-0000-0000-000000000000"
+{
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "<your-d1-database-name>",
+      "database_id": "<your-d1-database-id>",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
 ```
 
-> 占位 ID 只能用于本地测试，不能直接部署到线上。
+> 仓库中的 `wrangler.jsonc` 使用占位值。不要把真实 D1 ID 提交到公开仓库。
 
 ### 3. 设置加密密钥
 
-生成一个足够长的随机字符串，然后保存为 Worker Secret：
+`ENCRYPTION_KEY` 用于加密后台保存的 GitHub/GitLab Token。请使用密码管理器生成足够长的随机值，并作为 Worker Secret 保存：
 
-```powershell
+```bash
 npx wrangler secret put ENCRYPTION_KEY
 ```
 
-粘贴随机字符串并回车。不要把它写入 Git、README、截图或聊天记录。密钥必须长期保留；更换后需要重新填写所有仓库 Token。
+不要把密钥写入 README、代码、截图、Issue 或提交历史。它必须长期保留；更换后，已有仓库 Token 将无法解密，需要重新填写。
 
-### 4. 应用线上数据库迁移
+### 4. 应用数据库迁移
 
-```powershell
+```bash
 npm run db:migrate:remote
 ```
 
 ### 5. 构建并部署
 
-```powershell
+```bash
+npm run check
 npm run deploy
 ```
 
-部署完成后，用 Wrangler 输出的 `workers.dev` 地址打开 `/setup`，先创建一个临时密码。首次登录后系统会强制要求改成至少 12 位的新密码；改密完成前，后台与仓库接口均不可使用。这个密码与仓库 Token 不同，建议使用密码管理器生成并保存。
+部署后访问 `/setup` 完成管理员初始化。
 
-### 6. 绑定自定义域名（建议）
+### 6. 绑定自定义域名
 
-在 Cloudflare 控制台进入该 Worker 的 **Settings → Domains & Routes**，添加自己的域名。正式使用时建议：
+在 Cloudflare 控制台中进入该 Worker 的 **Settings → Domains & Routes**，添加并验证自己的域名。生产环境应启用 HTTPS。
 
-- 使用 HTTPS 自定义域名；
-- 保持 GitHub 与 GitLab 仓库为 Private；
-- 不把 Token、D1 ID、加密密钥写进公开仓库；
-- 为 Worker 开启访问日志，定期检查失败备份与异常登录。
+## 连接 GitHub
 
-## GitHub Token 配置
+建议使用 Fine-grained Personal Access Token，并遵循最小权限原则：
 
-推荐使用 Fine-grained Personal Access Token，并只授权需要作为主存储的仓库。
+1. 在 GitHub **Settings → Developer settings → Personal access tokens → Fine-grained tokens** 创建 Token。
+2. Repository access 只选择需要作为媒体存储的私有仓库。
+3. 授予 **Contents: Read and write**；通常还需要自动附带的 **Metadata: Read-only**。
+4. 在后台「存储库 → 连接 GitHub」填写：
+   - 所有者：GitHub 用户名或组织名
+   - 仓库名：例如 `media-library`
+   - 分支：通常为 `main`
+   - 存储子目录：可选，例如 `media`
+   - Token：刚创建的访问令牌
 
-在 GitHub **Settings → Developer settings → Personal access tokens → Fine-grained tokens** 创建 Token：
+可以按主题拆分多个私有仓库，例如图片、音乐或旅行归档，并在后台指定默认上传目标。
 
-- **Repository access**：只选一个或数个私有媒体仓库；
-- **Contents**：`Read and write`；
-- **Metadata**：`Read-only`（通常会自动附带）。
+## 连接 GitLab 备份
 
-回到后台「存储库 → 连接 GitHub」，填写：
+建议创建仅能访问备份项目的 Personal Access Token，并授予仓库读写所需的 `api` 权限。
 
-- 所有者：GitHub 用户名或组织名；
-- 仓库名：例如 `life-photos`；
-- 分支：通常为 `main`；
-- 存储子目录：可选，例如 `media`；
-- Token：粘贴刚创建的 Token。
+在后台「存储库 → 连接 GitLab」时，将备份库绑定到一个 GitHub 主仓库。GitLab 备份仓库不会作为新上传目标，也不会在展示页重复出现。
 
-每个主题可以使用单独的仓库，例如 `life-photos`、`favorite-music`、`travel-archive`。在后台把其中一个设为主仓库的“默认上传仓库”。
+### 年度备份
 
-## GitLab Token 配置
+1. 登录后台，打开「存储库」。
+2. 找到 GitHub 主仓库，执行「全量备份」。
+3. 等待页面完成分批同步并显示结果。
+4. 对 GitLab 仓库执行「扫描」，核对镜像状态。
+5. 在「操作记录」中确认出现 `repository.backup`。
+6. 若出现失败，根据仓库卡片中的错误修复 Token 或分支后重试。
 
-建议创建一个只访问备份项目的 Personal Access Token：
+备份不会自动定时触发。大型仓库建议分批执行，以控制 Cloudflare 与 GitLab 请求额度。
 
-- **Scope**：`api`；
-- 只给需要作为备份的私有项目授权（如使用项目访问令牌，则至少需要 `api` / 读写仓库权限）。
+## 图片、音乐与分享
 
-在后台「存储库 → 连接 GitLab」时，选择它对应的 **GitHub 主仓库**。GitLab 仓库只作为备份目标，不会直接接收新上传，也不会在展示页重复显示。
+### 上传规则
 
-## 年度备份流程
+- 图片：JPG、JPEG、PNG、GIF、WebP、AVIF、SVG、BMP、HEIC；单张最大 20 MB。
+- 音乐：MP3、M4A、AAC、WAV、FLAC、OGG、OPUS；单首最大 50 MB。
+- 文件按类型保存到 `images/` 或 `music/`，并使用中国标准时间的 17 位时间戳命名，例如 `20261025123045123.webp`。
+- 不保留原文件名，也不按年月创建目录。
 
-建议每年固定一天执行：
+### WebP 优化
 
-1. 登录后台；
-2. 打开「存储库」；
-3. 找到 GitHub 主仓库，点击「全量备份」；
-4. 页面会分批同步到绑定的 GitLab 备份仓库，并显示进度与失败数量；
-5. 结束后点击 GitLab 仓库的「扫描」，核对备份状态；
-6. 在「操作记录」确认出现 `repository.backup`；
-7. 如出现失败，查看仓库卡片上的错误信息，修复 Token 或分支后再次执行。
+- JPG、JPEG、PNG、BMP 会在浏览器端尝试转换。
+- 默认质量为 `0.86`，最长边限制为 `4096px`。
+- 已为 WebP/AVIF/HEIC 的文件不重复压缩。
+- GIF 保留动画；SVG 保留矢量格式。
+- 转换失败、输出格式不正确或体积未变小时，自动上传原文件。
+- 上传后的时间戳扩展名与实际文件格式一致。
 
-备份是手动触发，不会在后台偷偷自动运行。大仓库建议分批完成，避免一次性消耗过多 Cloudflare 请求额度。
+### 分享链接
 
-## Cloudflare 与 GitHub 网络说明
+在图片预览、音乐卡片、曲目表或后台内容库中点击「获取链接」，可生成：
 
-所有 GitHub/GitLab 请求都由 Worker 在服务端发出，浏览器不会直接连接这两个 API。这样私有仓库 Token 不会进入前端，也能避免部分网络环境下浏览器直连失败的跨域问题。
+- 直接访问链接：根路径 + 时间戳文件名
+- Markdown 图片：`![标题](链接)`
+- Markdown 音乐：`[标题](链接)`
 
-如果你在特定网络环境仍遇到 Worker 访问 GitHub 不稳定，可以在 Cloudflare 中把 Worker 的自定义域名和 API 请求统一走同源路径；本项目已按此设计，无需额外开放 GitHub 到浏览器的跨域权限。
+默认有效期为「永久」，也可选择 7 天、30 天或 1 年。管理员可以查看并撤销分享。
 
-## 图片、音乐与公开分享
+> 访问分享链接等同于“持有即可查看”。不要把包含私人内容的分享链接发布到公开网页、搜索引擎或社交平台。
 
-- 首页图片模块每页显示 8 张，音乐模块每页显示 6 首；两边的搜索、标签与页码互不影响。
-- 图片点击后可查看大图；音乐可直接播放，并支持唱片架和曲目表两种样式。
-- 在图片预览、音乐卡片、曲目表或后台内容库点击“获取链接”，可生成 Markdown 和直接访问链接。直接访问链接采用根路径 + 时间戳文件名，可直接在浏览器预览图片或播放音乐。
-- 默认有效期为“永久”；也可选择 7 天、30 天或 1 年。管理员可查看有效链接并随时撤销。
-- 图片 Markdown 为 `![标题](链接)`，音乐 Markdown 为 `[标题](链接)`，使用可直接访问的根路径文件地址，可粘贴到支持 Markdown 的页面。
-- 公开分享只开放被选中的那一件作品，不会改变整个站点的私密状态。
-- 已过期、已撤销或不存在的分享链接会返回不可访问提示。
+旧的 `/share/:token` 链接仍保持兼容。
 
-## 内容上传与同步规则
+## 安全与隐私
 
-- 图片支持 JPG、PNG、GIF、WebP、AVIF、SVG 等；单张最大 20 MB。
-- 音乐支持 MP3、M4A、AAC、WAV、FLAC、OGG 等；单首最大 50 MB。
-- 上传时会按类型保存到 `images/` 或 `music/` 目录，并统一以中国标准时间的 17 位时间戳重命名为文件名，例如 `20261025123045123.jpg`；不再保留原文件名前缀，也不增加年月目录。
-- 音乐上传时会自动读取歌名、作者、专辑和时长；前端作品名称优先显示识别结果或手动填写的信息，分享链接仍使用时间戳文件名。
-- 上传会写入目标 GitHub 仓库，并生成一条 D1 索引。
-- 「扫描」用于发现仓库里已有的图片/音乐；扫描不会因为远端暂时缺少文件就自动删除索引，删除必须显式执行。
-- GitLab 备份库扫描只核对镜像状态，不会把同一作品重复导入展示页。
-- 删除作品时：先删除主仓库文件；若主文件删除失败，会保留索引，避免产生无法管理的远端孤儿文件。
+- 保持 GitHub 与 GitLab 媒体仓库为 **Private**。
+- 使用独立且足够强的管理员密码，不要复用其他站点密码。
+- 将仓库 Token 仅保存在后台加密配置中，不要写进代码或提交到 Git。
+- 不要把 `ENCRYPTION_KEY`、D1 的真实 `database_id`、Cookie、Token 或数据库导出文件提交到仓库。
+- 部署后检查公开仓库历史；若曾提交密钥，应立即在 GitHub/GitLab 撤销并重新生成，而不是只删除文件。
+- 分享链接应按敏感内容对待，并设置合适有效期。
+- 定期检查后台操作记录与失败登录。
 
-## 上线前检查清单
+## 可直接替换的配置示例
 
-- [ ] `wrangler.jsonc` 已替换真实 D1 `database_id`
-- [ ] 已执行远程 D1 迁移
-- [ ] 已设置且备份 `ENCRYPTION_KEY`
-- [ ] 首次 `/setup` 已创建管理员密码
+README 只展示占位值。以下内容都不应原样作为真实凭据：
+
+```text
+站点地址：https://<your-domain.example>
+D1 database_id：<your-d1-database-id>
+GitHub 仓库：<owner>/<repository>
+GitLab 仓库：<namespace>/<repository>
+加密密钥：由密码管理器生成，仅保存为 Worker Secret
+管理员密码：首次部署时通过 /setup 设置
+```
+
+## 常用命令
+
+```bash
+npm run dev              # 启动本地前端与 Worker
+npm run typecheck        # TypeScript 检查
+npm run build            # 生产构建
+npm run check            # 类型检查与构建
+npm run db:migrate:local # 应用本地 D1 迁移
+npm run db:migrate:remote# 应用远程 D1 迁移
+npm run deploy           # 构建并部署到 Cloudflare
+```
+
+## 上线检查清单
+
+- [ ] 已创建自己的 D1 数据库并替换 `wrangler.jsonc` 占位值
+- [ ] 已执行远程数据库迁移
+- [ ] 已通过 Worker Secret 设置并备份 `ENCRYPTION_KEY`
+- [ ] 已通过 `/setup` 创建独立管理员密码
 - [ ] GitHub Token 权限已按最小范围配置
 - [ ] GitLab Token 权限已按最小范围配置
-- [ ] 私有仓库与私有站点访问方式已确认
-- [ ] 已测试一次真实上传与播放
-- [ ] 已测试一次单件备份和年度全量备份
+- [ ] GitHub 与 GitLab 仓库均为 Private
+- [ ] 已验证上传、图片预览、音乐播放和分享链接
+- [ ] 已验证撤销分享后的访问行为
+- [ ] 已执行一次小规模 GitLab 备份并核对结果
 - [ ] 已绑定自定义域名并确认 HTTPS
+- [ ] 已确认仓库中没有真实域名、凭据、D1 ID 或数据库导出
 
-## 当前线上状态
+## 参与贡献
 
-已部署至 Cloudflare Workers：
+欢迎提交 Issue 与 Pull Request。提交前请：
 
-- 站点：https://<your-domain.example>
-- D1 数据库：`shiguang-vault`（亚太区域）
-- 管理员密码：首次登录必须改密；改密完成前后台接口会拒绝访问
-- 当前为私密模式：未登录访问馆藏接口返回 403，登录后可进入工作台
+1. 运行 `npm run check`。
+2. 不提交 `.dev.vars`、`.env`、`.wrangler`、数据库导出、真实 Token 或私人媒体。
+3. 在 Issue 和截图中隐藏域名、用户名、仓库地址、Token 与 D1 ID。
+4. 描述可复现步骤，并说明使用的浏览器与运行环境。
 
-已验证：首页和健康检查、远程数据库迁移、管理员初始化、登录、强制首次改密、旧密码失效、未登录私密访问拦截、登录后真实站点文案读取。
+## 许可证
 
-根路径文件、旧分享链接、图片预览、音乐播放和 Range 请求将在本次部署后验收；GitLab 年度备份仍需按实际仓库配置定期手动执行并核对。
-
-## 上线后仍需配置
-
-1. 在后台「存储库」添加 GitHub 私有媒体仓库、分支、目录和 Token。
-2. 如需 GitLab 年度备份，再添加 GitLab 仓库并绑定对应 GitHub 主仓库。
-3. 上传一张图片和一首音乐，检查展示、播放和删除流程。
-4. 执行一次小规模备份并核对 GitLab 文件。
-5. 如需固定域名，在 Cloudflare Worker 的 **Settings → Domains & Routes** 绑定自定义域名。
+当前仓库尚未附带开源许可证文件。公开发布或接受外部贡献前，请根据项目用途添加合适的许可证（例如 MIT、Apache-2.0 或其他许可证），并更新本节。
