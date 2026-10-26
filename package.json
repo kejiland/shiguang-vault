@@ -11,8 +11,8 @@
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "db:migrate:local": "wrangler d1 migrations apply shiguang-vault --local",
-    "db:migrate:remote": "wrangler d1 migrations apply shiguang-vault --remote",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "deploy": "npm run build && wrangler deploy",
     "check": "npm run typecheck && npm run build"
   },

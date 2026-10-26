@@ -11,3 +11,5 @@ dist
 !.env.example
 !.dev.vars.example
 coverage
+.local-test-data.sql
+*.local.sql

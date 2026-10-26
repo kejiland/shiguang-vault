@@ -58,20 +58,13 @@ docker-compose.yml 本地测试编排
 
 ### 1. 安装依赖
 
-```bash
+```powershell
 npm install
 ```
 
 ### 2. 启动本地开发环境
 
 复制开发环境变量示例，并按需修改：
-
-```bash
-cp .dev.vars.example .dev.vars
-npm run dev
-```
-
-Windows PowerShell：
 
 ```powershell
 Copy-Item .dev.vars.example .dev.vars
@@ -84,7 +77,7 @@ npm run dev
 
 如本地尚未应用迁移：
 
-```bash
+```powershell
 npm run db:migrate:local
 ```
 
@@ -92,7 +85,7 @@ npm run db:migrate:local
 
 ### 4. 使用 Docker 测试
 
-```bash
+```powershell
 docker compose up -d --build
 docker compose ps
 ```
@@ -101,14 +94,14 @@ docker compose ps
 
 查看日志和停止服务：
 
-```bash
+```powershell
 docker compose logs -f vault
 docker compose down
 ```
 
 若要清空本地测试数据：
 
-```bash
+```powershell
 docker compose down -v
 ```
 
@@ -116,13 +109,13 @@ docker compose down -v
 
 ### 1. 登录 Wrangler
 
-```bash
+```powershell
 npx wrangler login
 ```
 
 ### 2. 创建 D1 数据库
 
-```bash
+```powershell
 npx wrangler d1 create <your-d1-database-name>
 ```
 
@@ -147,7 +140,7 @@ npx wrangler d1 create <your-d1-database-name>
 
 `ENCRYPTION_KEY` 用于加密后台保存的 GitHub/GitLab Token。请使用密码管理器生成足够长的随机值，并作为 Worker Secret 保存：
 
-```bash
+```powershell
 npx wrangler secret put ENCRYPTION_KEY
 ```
 
@@ -155,13 +148,13 @@ npx wrangler secret put ENCRYPTION_KEY
 
 ### 4. 应用数据库迁移
 
-```bash
+```powershell
 npm run db:migrate:remote
 ```
 
 ### 5. 构建并部署
 
-```bash
+```powershell
 npm run check
 npm run deploy
 ```
@@ -262,13 +255,13 @@ GitLab 仓库：<namespace>/<repository>
 
 ## 常用命令
 
-```bash
+```powershell
 npm run dev              # 启动本地前端与 Worker
 npm run typecheck        # TypeScript 检查
 npm run build            # 生产构建
 npm run check            # 类型检查与构建
 npm run db:migrate:local # 应用本地 D1 迁移
-npm run db:migrate:remote# 应用远程 D1 迁移
+npm run db:migrate:remote  # 应用远程 D1 迁移
 npm run deploy           # 构建并部署到 Cloudflare
 ```
 
