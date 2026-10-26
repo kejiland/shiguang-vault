@@ -8,6 +8,7 @@
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
 ![GitHub](https://img.shields.io/badge/Storage-GitHub-181717?logo=github&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-blue)
 
 ## 功能
 
@@ -291,4 +292,4 @@ npm run deploy           # 构建并部署到 Cloudflare
 
 ## 许可证
 
-当前仓库尚未附带开源许可证文件。公开发布或接受外部贡献前，请根据项目用途添加合适的许可证（例如 MIT、Apache-2.0 或其他许可证），并更新本节。
+本项目以 [MIT License](LICENSE) 开源。
