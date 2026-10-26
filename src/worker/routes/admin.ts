@@ -303,6 +303,9 @@ adminRoutes.post("/api/admin/assets", async (c) => {
   // Generate the timestamp once so the D1 filename and repository path always match.
   const filename = timestampFilename(originalFilename);
   const path = `${kind === "image" ? "images" : "music"}/${filename}`;
+  const uploadedSize = bytes.length;
+  const sourceSize = Number(form.get("sourceSize") ?? 0);
+  const originalSize = kind === "image" && sourceSize > uploadedSize && sourceSize <= 20 * 1024 * 1024 ? sourceSize : uploadedSize;
   const fallbackTitle = originalFilename.replace(/\.[^.]+$/, "");
   const submittedTitle = String(form.get("title") ?? "").trim().slice(0, 160);
   const submittedArtist = String(form.get("artist") ?? "").trim().slice(0, 120);
@@ -324,7 +327,7 @@ adminRoutes.post("/api/admin/assets", async (c) => {
   await c.env.DB.prepare(
     `INSERT INTO assets (id, kind, repo_id, path, filename, mime_type, size, remote_sha, title, artist, album, tags, width, height, duration_seconds, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(id, kind, repo.id, path, filename, mimeFor(filename, file.type), bytes.length, result.sha, title, artist, album, JSON.stringify(tags), width, height, duration, now, now).run();
+  ).bind(id, kind, repo.id, path, filename, mimeFor(filename, file.type), uploadedSize, result.sha, title, artist, album, JSON.stringify(tags), width, height, duration, now, now).run();
   const backups = await c.env.DB.prepare("SELECT * FROM repositories WHERE backup_of = ? AND enabled = 1").bind(repo.id).all<RepositoryRow>();
   for (const backup of backups.results) {
     await c.env.DB.prepare("INSERT OR IGNORE INTO asset_mirrors (asset_id, repo_id, status) VALUES (?, ?, 'pending')").bind(id, backup.id).run();
@@ -332,7 +335,7 @@ adminRoutes.post("/api/admin/assets", async (c) => {
   const asset = await c.env.DB.prepare(
     `SELECT a.*, r.label AS repo_label, r.provider AS repo_provider FROM assets a JOIN repositories r ON r.id = a.repo_id WHERE a.id = ?`
   ).bind(id).first<AssetRow & { repo_label: string; repo_provider: string }>();
-  await audit(c, "asset.upload", id, { title, kind, repoId: repo.id, size: bytes.length });
+  await audit(c, "asset.upload", id, { title, kind, repoId: repo.id, size: uploadedSize, sourceSize: originalSize, optimizedFormat: kind === "image" && bytes.length < originalSize ? "webp" : null });
   return c.json({ asset: asset ? assetJson(asset) : null }, 201);
 });
 
