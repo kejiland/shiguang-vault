@@ -59,6 +59,25 @@ function cleanPath(path: string): string {
   return path.replace(/^\/+/, "");
 }
 
+export function mediaStoragePaths(
+  repo: RepositoryRow,
+  kind: "image" | "music",
+  filename: string
+): { assetPath: string; remotePath: string } {
+  const root = normalizeRoot(repo.root_path);
+  const safeName = cleanPath(filename);
+  if (root) {
+    return {
+      assetPath: safeName,
+      remotePath: `${root}/${safeName}`
+    };
+  }
+
+  const defaultDirectory = kind === "image" ? "images" : "music";
+  const remotePath = `${defaultDirectory}/${safeName}`;
+  return { assetPath: remotePath, remotePath };
+}
+
 async function safeJson(response: Response): Promise<Record<string, unknown>> {
   const text = await response.text();
   try { return JSON.parse(text) as Record<string, unknown>; } catch { return { message: text.slice(0, 500) }; }
@@ -144,7 +163,7 @@ export async function listRepositoryFiles(
     if (!response.ok) throw remoteError(repo, response.status, await safeJson(response));
     const data = await safeJson(response);
     if (data.truncated === true) {
-      throw new StorageError(`${repo.label} 文件数量超过 GitHub 单次目录树上限，请把存储子目录拆分为多个仓库`, 409, "github");
+      throw new StorageError(`${repo.label} 文件数量超过 GitHub 单次目录树上限，请把存储目录拆分为多个仓库`, 409, "github");
     }
     const tree = Array.isArray(data.tree) ? data.tree as GitHubContent[] : [];
     return tree

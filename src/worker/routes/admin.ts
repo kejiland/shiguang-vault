@@ -4,7 +4,7 @@ import type { AppEnv, AssetRow, RepositoryRow, ShareLinkRow } from "../types";
 import { getSettings, saveSettings } from "../lib/settings";
 import { assetJson, indexRepositoryFilenames, inferKind, mimeFor, removeAsset, safeFilename, syncAssetMirror, syncRepository, timestampFilename, type FilenameIndex } from "../lib/media";
 import { parseBuffer } from "music-metadata";
-import { testRepository, uploadFile } from "../lib/storage";
+import { mediaStoragePaths, testRepository, uploadFile } from "../lib/storage";
 import { decryptSecret, encryptSecret, nowIso, randomToken, sha256, uuid } from "../lib/crypto";
 import {
   changeAdminPassword, clearLoginFailures, clearSessionCookie, createAdmin, createSession, currentSession,
@@ -302,7 +302,7 @@ adminRoutes.post("/api/admin/assets", async (c) => {
 
   // Generate the timestamp once so the D1 filename and repository path always match.
   const filename = timestampFilename(originalFilename);
-  const path = `${kind === "image" ? "images" : "music"}/${filename}`;
+  const { assetPath, remotePath } = mediaStoragePaths(repo, kind, filename);
   const uploadedSize = bytes.length;
   const sourceSize = Number(form.get("sourceSize") ?? 0);
   const originalSize = kind === "image" && sourceSize > uploadedSize && sourceSize <= 20 * 1024 * 1024 ? sourceSize : uploadedSize;
@@ -315,7 +315,15 @@ adminRoutes.post("/api/admin/assets", async (c) => {
   const album = submittedAlbum || audio?.album || null;
   const tagsInput = String(form.get("tags") ?? "");
   const tags = [...new Set(tagsInput.split(/[,，\s]+/).map((tag) => tag.trim()).filter(Boolean))].slice(0, 12);
-  const result = await uploadFile(repo, c.env, path, bytes, `Upload ${filename}`);
+  const result = await uploadFile(
+    repo,
+    c.env,
+    remotePath,
+    bytes,
+    `Upload ${filename}`,
+    null,
+    { pathIncludesRepositoryRoot: true }
+  );
   const id = uuid();
   const now = nowIso();
   const rawWidth = Number(form.get("width") ?? 0);
@@ -327,7 +335,7 @@ adminRoutes.post("/api/admin/assets", async (c) => {
   await c.env.DB.prepare(
     `INSERT INTO assets (id, kind, repo_id, path, filename, mime_type, size, remote_sha, title, artist, album, tags, width, height, duration_seconds, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(id, kind, repo.id, path, filename, mimeFor(filename, file.type), uploadedSize, result.sha, title, artist, album, JSON.stringify(tags), width, height, duration, now, now).run();
+  ).bind(id, kind, repo.id, assetPath, filename, mimeFor(filename, file.type), uploadedSize, result.sha, title, artist, album, JSON.stringify(tags), width, height, duration, now, now).run();
   const asset = await c.env.DB.prepare(
     `SELECT a.*, r.label AS repo_label, r.provider AS repo_provider FROM assets a JOIN repositories r ON r.id = a.repo_id WHERE a.id = ?`
   ).bind(id).first<AssetRow & { repo_label: string; repo_provider: string }>();

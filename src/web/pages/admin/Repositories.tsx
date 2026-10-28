@@ -242,7 +242,7 @@ function EditRepoDialog({ repo, onClose, onSaved }: { repo: Repository; onClose:
         <label className="field"><span>显示名称</span><input value={label} onChange={(event) => setLabel(event.target.value)} required /></label>
         <div className="field-row">
           <label className="field"><span>分支</span><input value={branch} onChange={(event) => setBranch(event.target.value)} required /></label>
-          <label className="field"><span>存储子目录 <small>可选</small></span><input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="media" /></label>
+          <label className="field"><span>存储目录 <small>可选，图片默认 images，填写后直接存入该目录</small></span><input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="images" /></label>
         </div>
         <label className="field"><span>更新访问令牌 <small>留空则保持原令牌</small></span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="仅在需要更换 Token 时填写" autoComplete="new-password" /></label>
         <div className="settings-switches">
@@ -299,7 +299,7 @@ function RepoDialog({ provider, repositories, onClose, onSaved }: { provider: "g
         </div>
         <div className="field-row">
           <label className="field"><span>分支</span><input value={form.branch} onChange={(event) => set("branch", event.target.value)} placeholder="main" required /></label>
-          <label className="field"><span>存储子目录 <small>可选</small></span><input value={form.rootPath} onChange={(event) => set("rootPath", event.target.value)} placeholder="media" /></label>
+          <label className="field"><span>存储目录 <small>可选，图片默认 images，填写后直接存入该目录</small></span><input value={form.rootPath} onChange={(event) => set("rootPath", event.target.value)} placeholder="images" /></label>
         </div>
         <label className="field"><span>{provider === "github" ? "Fine-grained Personal Access Token" : "Private Access Token"}</span><input type="password" value={form.token} onChange={(event) => set("token", event.target.value)} placeholder="只在服务端加密保存，不会返回前端" required autoComplete="new-password" /></label>
         <div className="token-hint"><LockKeyhole size={14} /> 令牌使用 AES-GCM 加密后存入 D1。创建令牌时请只授予该仓库所需的最小权限。</div>
