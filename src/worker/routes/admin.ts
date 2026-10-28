@@ -564,7 +564,7 @@ adminRoutes.post("/api/repos/:id/backup", async (c) => {
   const filenameIndexes = new Map<string, FilenameIndex>();
   for (const backup of backups.results) {
     try {
-      filenameIndexes.set(backup.id, await indexRepositoryFilenames(backup, c.env));
+      filenameIndexes.set(backup.id, await indexRepositoryFilenames(backup, c.env, { scanWholeRepository: true }));
     } catch {
       // Fall back to loading the index on demand so a transient tree error does not skip deduplication.
     }

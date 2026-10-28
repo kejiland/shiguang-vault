@@ -8,9 +8,19 @@ function filenameFromPath(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
 
-export async function indexRepositoryFilenames(repo: RepositoryRow, env: Env): Promise<FilenameIndex> {
+function sourceRepositoryPath(source: RepositoryRow, assetPath: string): string {
+  const root = normalizeRoot(source.root_path);
+  const path = assetPath.replace(/^\/+/, "");
+  return root ? `${root}/${path}` : path;
+}
+
+export async function indexRepositoryFilenames(
+  repo: RepositoryRow,
+  env: Env,
+  options: { scanWholeRepository?: boolean } = {}
+): Promise<FilenameIndex> {
   const index: FilenameIndex = new Map();
-  for (const file of await listRepositoryFiles(repo, env)) {
+  for (const file of await listRepositoryFiles(repo, env, options)) {
     const filename = filenameFromPath(file.path);
     if (filename && !index.has(filename)) index.set(filename, file);
   }
@@ -141,13 +151,15 @@ export async function buildMirrorFile(
   const existing = await env.DB.prepare(
     "SELECT remote_sha FROM asset_mirrors WHERE asset_id = ? AND repo_id = ?"
   ).bind(asset.id, target.id).first<{ remote_sha: string | null }>();
+  const mirrorPath = sourceRepositoryPath(source, asset.path);
   const result = await uploadFile(
     target,
     env,
-    asset.path,
+    mirrorPath,
     bytes,
     `Mirror ${asset.filename}`,
-    existing?.remote_sha
+    existing?.remote_sha,
+    { pathIncludesRepositoryRoot: true }
   );
   await env.DB.prepare(
     `INSERT INTO asset_mirrors (asset_id, repo_id, status, remote_sha, synced_at, error)
@@ -157,7 +169,7 @@ export async function buildMirrorFile(
   ).bind(asset.id, target.id, result.sha, now).run();
   await env.DB.prepare("UPDATE repositories SET last_synced_at = ?, last_sync_error = NULL, updated_at = ? WHERE id = ?")
     .bind(now, now, target.id).run();
-  options.filenames?.set(asset.filename, { path: asset.path, sha: result.sha, size: result.size });
+  options.filenames?.set(asset.filename, { path: mirrorPath, sha: result.sha, size: result.size });
   return { sha: result.sha, skipped: false };
 }
 
@@ -170,7 +182,7 @@ export async function syncAssetMirror(
   const source = await env.DB.prepare("SELECT * FROM repositories WHERE id = ?").bind(asset.repo_id).first<RepositoryRow>();
   if (!source) return { ok: false, error: "源仓库不存在" };
   try {
-    const filenames = options.filenames ?? await indexRepositoryFilenames(target, env);
+    const filenames = options.filenames ?? await indexRepositoryFilenames(target, env, { scanWholeRepository: true });
     const result = await buildMirrorFile(env, source, target, asset, { ...options, filenames });
     return { ok: true, sha: result.sha, skipped: result.skipped };
   } catch (error) {
@@ -208,7 +220,14 @@ export async function removeAsset(
     ).bind(asset.id).all<RepositoryRow & { remote_sha: string | null }>();
     for (const mirror of mirrors.results) {
       try {
-        await deleteFile(mirror, env, asset.path, mirror.remote_sha, `Delete mirrored ${asset.filename}`);
+        await deleteFile(
+          mirror,
+          env,
+          sourceRepositoryPath(source, asset.path),
+          mirror.remote_sha,
+          `Delete mirrored ${asset.filename}`,
+          { pathIncludesRepositoryRoot: true }
+        );
       } catch (error) {
         failures.push(`${mirror.label}: ${error instanceof Error ? error.message : "删除失败"}`);
       }
@@ -222,7 +241,7 @@ export async function syncRepository(
   env: Env,
   repo: RepositoryRow
 ): Promise<{ scanned: number; imported: number; mainRepo: boolean; removed: number }> {
-  const files = await listRepositoryFiles(repo, env);
+  const files = await listRepositoryFiles(repo, env, { scanWholeRepository: Boolean(repo.backup_of) });
   const now = nowIso();
   const filenames = new Set(files.map((file) => filenameFromPath(file.path)));
 
@@ -274,7 +293,7 @@ export async function syncRepository(
   for (const backup of backups.results) {
     let backupFilenames: FilenameIndex;
     try {
-      backupFilenames = await indexRepositoryFilenames(backup, env);
+      backupFilenames = await indexRepositoryFilenames(backup, env, { scanWholeRepository: true });
     } catch {
       // Keep the previous status when the backup cannot be inspected.
       continue;

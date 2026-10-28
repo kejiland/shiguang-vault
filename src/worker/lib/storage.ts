@@ -128,8 +128,12 @@ export async function testRepository(repo: RepositoryRow, env: Env): Promise<{ o
   return { ok: true, defaultBranch: String(data.default_branch ?? repo.branch) };
 }
 
-export async function listRepositoryFiles(repo: RepositoryRow, env: Env): Promise<RemoteFile[]> {
-  const root = normalizeRoot(repo.root_path);
+export async function listRepositoryFiles(
+  repo: RepositoryRow,
+  env: Env,
+  options: { scanWholeRepository?: boolean } = {}
+): Promise<RemoteFile[]> {
+  const root = options.scanWholeRepository ? "" : normalizeRoot(repo.root_path);
   if (repo.provider === "github") {
     const treeRef = encodeURIComponent(repo.branch);
     const response = await githubFetch(
@@ -185,9 +189,10 @@ export async function uploadFile(
   path: string,
   bytes: Uint8Array,
   message: string,
-  existingSha?: string | null
+  existingSha?: string | null,
+  options: { pathIncludesRepositoryRoot?: boolean } = {}
 ): Promise<{ sha: string; size: number }> {
-  const fullPath = repoPath(repo, path);
+  const fullPath = options.pathIncludesRepositoryRoot ? cleanPath(path) : repoPath(repo, path);
   const content = bytesToBase64(bytes);
   if (repo.provider === "github") {
     const body: Record<string, unknown> = {
@@ -208,16 +213,30 @@ export async function uploadFile(
   }
 
   const encodedPath = encodeURIComponent(fullPath);
-  const response = await gitlabFetch(repo, env, gitlabApi(repo, `/repository/files/${encodedPath}`), {
-    method: existingSha ? "PUT" : "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      branch: repo.branch,
-      content,
-      encoding: "base64",
-      commit_message: message
-    })
+  const body = JSON.stringify({
+    branch: repo.branch,
+    content,
+    encoding: "base64",
+    commit_message: message
   });
+  const request = (method: "POST" | "PUT") => gitlabFetch(repo, env, gitlabApi(repo, `/repository/files/${encodedPath}`), {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body
+  });
+
+  let response = await request(existingSha ? "PUT" : "POST");
+  if (!response.ok) {
+    // A stored mirror SHA can belong to an older path. If the intended path no
+    // longer exists, create it instead of treating the missing file as fatal.
+    if (response.status === 404 && existingSha) {
+      response = await request("POST");
+    } else if (response.status === 400 && !existingSha) {
+      // GitLab uses POST to create a file and returns 400 when it already
+      // exists. In that case, update the same repository-relative path.
+      response = await request("PUT");
+    }
+  }
   if (!response.ok) throw remoteError(repo, response.status, await safeJson(response));
   const data = await safeJson(response);
   return { sha: String(data.content_sha256 ?? data.last_commit_id ?? ""), size: bytes.length };
@@ -246,8 +265,15 @@ export async function readFile(repo: RepositoryRow, env: Env, path: string, rang
 }
 
 
-export async function deleteFile(repo: RepositoryRow, env: Env, path: string, sha?: string | null, message = "Delete media"): Promise<void> {
-  const fullPath = repoPath(repo, path);
+export async function deleteFile(
+  repo: RepositoryRow,
+  env: Env,
+  path: string,
+  sha?: string | null,
+  message = "Delete media",
+  options: { pathIncludesRepositoryRoot?: boolean } = {}
+): Promise<void> {
+  const fullPath = options.pathIncludesRepositoryRoot ? cleanPath(path) : repoPath(repo, path);
   if (repo.provider === "github") {
     if (!sha) throw new StorageError("缺少文件版本信息，无法安全删除", 409, "github");
     const response = await githubFetch(repo, env, githubApi(repo, `/contents/${encodePath(fullPath)}`), {
@@ -275,7 +301,10 @@ export async function mirrorAsset(
   bytes: Uint8Array,
   existingSha?: string | null
 ): Promise<{ sha: string }> {
-  const result = await uploadFile(target, env, path, bytes, `Mirror ${path}`, existingSha);
+  const sourcePath = repoPath(source, path);
+  const result = await uploadFile(target, env, sourcePath, bytes, `Mirror ${sourcePath}`, existingSha, {
+    pathIncludesRepositoryRoot: true
+  });
   return { sha: result.sha };
 }
 
