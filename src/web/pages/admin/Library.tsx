@@ -74,7 +74,7 @@ export function AdminLibrary({ repositories, onRefresh }: Props) {
     try {
       const result = await api<{ results: Array<{ ok: boolean; label: string; error?: string }> }>(`/api/admin/assets/${asset.id}/mirror`, { method: "POST" });
       const failed = result.results.filter((item) => !item.ok);
-      setNotice(failed.length ? `${failed.length} 个备份仓库同步失败：${failed.map((item) => `${item.label} ${item.error ?? ""}`).join("；")}` : "已同步到全部 GitLab 备份仓库");
+      setNotice(failed.length ? `${failed.length} 个备份仓库同步失败：${failed.map((item) => `${item.label} ${item.error ?? ""}`).join("；")}` : "已检查全部 GitLab 备份仓库，同名文件自动跳过");
       await onRefresh();
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : "同步失败");

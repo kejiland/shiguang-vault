@@ -70,7 +70,7 @@ export function AdminAppearance({ repositories }: { repositories: Repository[] }
           <label className="field"><span>页脚文字</span><input value={settings.footer_text} onChange={(event) => set("footer_text", event.target.value)} /></label>
           <div className="settings-switches">
             <label className="switch-field switch-field--box"><input type="checkbox" checked={settings.allow_download} onChange={(event) => set("allow_download", event.target.checked)} /><span /><div><strong>允许访客下载原文件</strong><small>关闭后，访客仍可查看与播放，但不能直接下载。</small></div></label>
-            <div className="manual-backup-note"><ArchiveRestore size={17} /><div><strong>GitLab 备份按需执行</strong><small>为避免触发 Cloudflare 请求限制，备份统一在「存储库」中手动执行，适合按年维护。</small></div></div>
+            <div className="manual-backup-note"><ArchiveRestore size={17} /><div><strong>GitLab 自动增量备份</strong><small>新上传会自动同步到绑定的备份库，同名文件会跳过；「全量备份」用于补齐历史内容。</small></div></div>
           </div>
           {notice && <div className="form-result is-success"><Check size={17} /><span>{notice}</span></div>}
           {error && <p className="form-error">{error}</p>}

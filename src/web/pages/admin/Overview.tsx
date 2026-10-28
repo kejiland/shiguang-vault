@@ -108,7 +108,7 @@ export function AdminOverview({ assets, counts, imageCount, musicCount, reposito
           {repositories.length === 0 ? (
             <button className="button button--outline-light" type="button" onClick={() => onNavigate("repositories")}>连接第一个存储库</button>
           ) : (
-            <p className="panel-note">GitLab 备份不会自动高频同步。你可以随时在「存储库」中手动执行一次完整备份。</p>
+            <p className="panel-note">新上传会自动增量备份到 GitLab，同名文件会跳过。历史内容可在「存储库」中执行一次全量备份。</p>
           )}
         </section>
       </div>

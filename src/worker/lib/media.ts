@@ -1,6 +1,21 @@
 import type { AssetRow, Env, RepositoryRow } from "../types";
-import { deleteFile, encodePath, listRepositoryFiles, normalizeRoot, readFile, uploadFile } from "./storage";
+import { deleteFile, encodePath, listRepositoryFiles, normalizeRoot, readFile, uploadFile, type RemoteFile } from "./storage";
 import { nowIso, uuid } from "./crypto";
+
+export type FilenameIndex = Map<string, RemoteFile>;
+
+function filenameFromPath(path: string): string {
+  return path.slice(path.lastIndexOf("/") + 1);
+}
+
+export async function indexRepositoryFilenames(repo: RepositoryRow, env: Env): Promise<FilenameIndex> {
+  const index: FilenameIndex = new Map();
+  for (const file of await listRepositoryFiles(repo, env)) {
+    const filename = filenameFromPath(file.path);
+    if (filename && !index.has(filename)) index.set(filename, file);
+  }
+  return index;
+}
 
 export type AssetRecord = AssetRow & {
   repo_label?: string;
@@ -105,10 +120,24 @@ export async function buildMirrorFile(
   env: Env,
   source: RepositoryRow,
   target: RepositoryRow,
-  asset: AssetRow
-): Promise<{ sha: string }> {
-  const response = await readFile(source, env, asset.path, null, asset.remote_sha);
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  asset: AssetRow,
+  options: { bytes?: Uint8Array; filenames?: FilenameIndex } = {}
+): Promise<{ sha: string; skipped: boolean }> {
+  const now = nowIso();
+  const duplicate = options.filenames?.get(asset.filename);
+  if (duplicate) {
+    await env.DB.prepare(
+      `INSERT INTO asset_mirrors (asset_id, repo_id, status, remote_sha, synced_at, error)
+       VALUES (?, ?, 'synced', ?, ?, NULL)
+       ON CONFLICT(asset_id, repo_id) DO UPDATE SET status = 'synced', remote_sha = excluded.remote_sha,
+         synced_at = excluded.synced_at, error = NULL`
+    ).bind(asset.id, target.id, duplicate.sha, now).run();
+    await env.DB.prepare("UPDATE repositories SET last_synced_at = ?, last_sync_error = NULL, updated_at = ? WHERE id = ?")
+      .bind(now, now, target.id).run();
+    return { sha: duplicate.sha, skipped: true };
+  }
+
+  const bytes = options.bytes ?? new Uint8Array(await (await readFile(source, env, asset.path, null, asset.remote_sha)).arrayBuffer());
   const existing = await env.DB.prepare(
     "SELECT remote_sha FROM asset_mirrors WHERE asset_id = ? AND repo_id = ?"
   ).bind(asset.id, target.id).first<{ remote_sha: string | null }>();
@@ -125,20 +154,25 @@ export async function buildMirrorFile(
      VALUES (?, ?, 'synced', ?, ?, NULL)
      ON CONFLICT(asset_id, repo_id) DO UPDATE SET status = 'synced', remote_sha = excluded.remote_sha,
        synced_at = excluded.synced_at, error = NULL`
-  ).bind(asset.id, target.id, result.sha, nowIso()).run();
-  return result;
+  ).bind(asset.id, target.id, result.sha, now).run();
+  await env.DB.prepare("UPDATE repositories SET last_synced_at = ?, last_sync_error = NULL, updated_at = ? WHERE id = ?")
+    .bind(now, now, target.id).run();
+  options.filenames?.set(asset.filename, { path: asset.path, sha: result.sha, size: result.size });
+  return { sha: result.sha, skipped: false };
 }
 
 export async function syncAssetMirror(
   env: Env,
   asset: AssetRow,
-  target: RepositoryRow
-): Promise<{ ok: boolean; sha?: string; error?: string }> {
+  target: RepositoryRow,
+  options: { bytes?: Uint8Array; filenames?: FilenameIndex } = {}
+): Promise<{ ok: boolean; sha?: string; skipped?: boolean; error?: string }> {
   const source = await env.DB.prepare("SELECT * FROM repositories WHERE id = ?").bind(asset.repo_id).first<RepositoryRow>();
   if (!source) return { ok: false, error: "源仓库不存在" };
   try {
-    const result = await buildMirrorFile(env, source, target, asset);
-    return { ok: true, sha: result.sha };
+    const filenames = options.filenames ?? await indexRepositoryFilenames(target, env);
+    const result = await buildMirrorFile(env, source, target, asset, { ...options, filenames });
+    return { ok: true, sha: result.sha, skipped: result.skipped };
   } catch (error) {
     const message = error instanceof Error ? error.message : "镜像失败";
     await env.DB.prepare(
@@ -146,6 +180,8 @@ export async function syncAssetMirror(
        VALUES (?, ?, 'failed', ?)
        ON CONFLICT(asset_id, repo_id) DO UPDATE SET status = 'failed', error = excluded.error`
     ).bind(asset.id, target.id, message).run();
+    await env.DB.prepare("UPDATE repositories SET last_sync_error = ?, updated_at = ? WHERE id = ?")
+      .bind(message, nowIso(), target.id).run();
     return { ok: false, error: message };
   }
 }
@@ -188,7 +224,7 @@ export async function syncRepository(
 ): Promise<{ scanned: number; imported: number; mainRepo: boolean; removed: number }> {
   const files = await listRepositoryFiles(repo, env);
   const now = nowIso();
-  const paths = new Set(files.map((file) => file.path));
+  const filenames = new Set(files.map((file) => filenameFromPath(file.path)));
 
   // A backup repository is only an inventory check. Its files must never be
   // inserted into assets, otherwise the public collection shows each work twice.
@@ -196,7 +232,7 @@ export async function syncRepository(
     const assets = await env.DB.prepare("SELECT * FROM assets WHERE repo_id = ?")
       .bind(repo.backup_of).all<AssetRow>();
     for (const asset of assets.results) {
-      const exists = paths.has(asset.path);
+      const exists = filenames.has(asset.filename);
       await env.DB.prepare(
         `INSERT INTO asset_mirrors (asset_id, repo_id, status, synced_at, error)
          VALUES (?, ?, ?, ?, NULL)
@@ -215,10 +251,15 @@ export async function syncRepository(
   const existingAssets = await env.DB.prepare("SELECT * FROM assets WHERE repo_id = ?")
     .bind(repo.id).all<AssetRow>();
   const existingPaths = new Set(existingAssets.results.map((asset) => asset.path));
+  const newPaths = new Set<string>();
   let imported = 0;
   for (const file of files) {
+    const isNew = !existingPaths.has(file.path);
     if (await upsertDiscoveredAsset(env, repo, file)) {
-      if (!existingPaths.has(file.path)) imported += 1;
+      if (isNew) {
+        imported += 1;
+        newPaths.add(file.path);
+      }
     }
   }
 
@@ -231,15 +272,19 @@ export async function syncRepository(
     "SELECT * FROM repositories WHERE backup_of = ? AND enabled = 1"
   ).bind(repo.id).all<RepositoryRow>();
   for (const backup of backups.results) {
-    let backupPaths = new Set<string>();
+    let backupFilenames: FilenameIndex;
     try {
-      backupPaths = new Set((await listRepositoryFiles(backup, env)).map((file) => file.path));
+      backupFilenames = await indexRepositoryFilenames(backup, env);
     } catch {
       // Keep the previous status when the backup cannot be inspected.
       continue;
     }
     for (const asset of allAssets.results) {
-      const exists = backupPaths.has(asset.path);
+      if (newPaths.has(asset.path)) {
+        await syncAssetMirror(env, asset, backup, { filenames: backupFilenames });
+        continue;
+      }
+      const exists = backupFilenames.has(asset.filename);
       await env.DB.prepare(
         `INSERT INTO asset_mirrors (asset_id, repo_id, status, synced_at, error)
          VALUES (?, ?, ?, ?, NULL)

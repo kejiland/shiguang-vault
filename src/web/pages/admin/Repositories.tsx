@@ -23,13 +23,8 @@ const blankForm = (provider: "github" | "gitlab" = "github"): RepoForm => ({
 });
 
 function backupFreshness(repo: Repository): { label: string; overdue: boolean } {
-  if (!repo.lastSyncedAt) return { label: "尚未执行备份", overdue: true };
-  const elapsed = Date.now() - Date.parse(repo.lastSyncedAt);
-  if (!Number.isFinite(elapsed) || elapsed < 0) return { label: "备份时间待核对", overdue: false };
-  const days = Math.floor(elapsed / 86_400_000);
-  if (days >= 365) return { label: `已 ${days} 天未更新，建议现在备份`, overdue: true };
-  const remaining = Math.max(0, 365 - days);
-  return { label: `距年度更新还有 ${remaining} 天`, overdue: false };
+  if (!repo.lastSyncedAt) return { label: "等待首次自动备份", overdue: true };
+  return { label: `最近备份 ${formatDate(repo.lastSyncedAt)}`, overdue: false };
 }
 
 export function AdminRepositories({ repositories, onRefresh }: Props) {
@@ -52,19 +47,21 @@ export function AdminRepositories({ repositories, onRefresh }: Props) {
       } else {
         let offset = 0;
         let synced = 0;
+        let skipped = 0;
         let total = 0;
         let failed = 0;
         let done = false;
         while (!done) {
-          const response = await api<{ total: number; synced: number; failures: unknown[]; nextOffset: number | null; done: boolean; processed: number; totalAssets: number }>(`/api/repos/${repo.id}/backup?offset=${offset}&limit=8`, { method: "POST" });
+          const response = await api<{ total: number; synced: number; skipped: number; failures: unknown[]; nextOffset: number | null; done: boolean; processed: number; totalAssets: number }>(`/api/repos/${repo.id}/backup?offset=${offset}&limit=8`, { method: "POST" });
           synced += response.synced;
+          skipped += response.skipped;
           total = response.total;
           failed += response.failures.length;
           done = response.done;
           offset = response.nextOffset ?? 0;
           if (response.totalAssets > 0) setNotice({ type: "success", text: `正在备份 ${response.processed}/${response.totalAssets} 件作品…` });
         }
-        setNotice({ type: failed ? "error" : "success", text: `备份完成：${synced}/${total} 个镜像成功${failed ? `，${failed} 个失败` : ""}` });
+        setNotice({ type: failed ? "error" : "success", text: `备份完成：新增 ${synced} 个，同名跳过 ${skipped} 个${failed ? `，${failed} 个失败` : ""}（共 ${total} 项）` });
       }
       await onRefresh();
     } catch (cause) {
@@ -129,7 +126,7 @@ export function AdminRepositories({ repositories, onRefresh }: Props) {
         onEdit={setEditing} onDelete={setDeleting} onAdd={() => setDialog("github")}
       />
       <RepositorySection
-        title="GitLab 备份" subtitle="建议按年手动执行一次完整镜像，避免频繁写入"
+        title="GitLab 备份" subtitle="新上传会自动增量备份；按文件名跳过已有内容"
         icon={<Gitlab size={19} />} repos={gitlab} busyId={busyId}
         onTest={(repo) => action(repo, "test")} onSync={(repo) => action(repo, "sync")}
         onEdit={setEditing} onDelete={setDeleting} onAdd={() => setDialog("gitlab")}
@@ -140,7 +137,7 @@ export function AdminRepositories({ repositories, onRefresh }: Props) {
         <div className="guide-grid">
           <div><span>01</span><h3>创建空仓库</h3><p>在 GitHub 或 GitLab 新建私有仓库，并勾选初始化 README。也可以使用已有仓库。</p></div>
           <div><span>02</span><h3>创建访问令牌</h3><p>GitHub Fine-grained Token 需要目标仓库 Contents 的读写权限；GitLab Token 需要 <code>api</code> 或 <code>write_repository</code> 权限。</p></div>
-          <div><span>03</span><h3>填写连接信息</h3><p>将目标 GitLab 仓库设为某个 GitHub 仓库的备份。上传后可在内容库中单独或批量备份。</p></div>
+          <div><span>03</span><h3>填写连接信息</h3><p>将目标 GitLab 仓库设为某个 GitHub 仓库的备份。新文件上传后会自动备份，也可用「全量备份」补齐历史内容。</p></div>
         </div>
       </section>
 
@@ -285,9 +282,9 @@ function RepoDialog({ provider, repositories, onClose, onSaved }: { provider: "g
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <form className="dialog dialog--wide" onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="repo-dialog-title">
         <div className="dialog__header"><div><span className="eyebrow">CONNECT {provider.toUpperCase()}</span><h2 id="repo-dialog-title">{provider === "github" ? "连接 GitHub 主仓库" : "连接 GitLab 备份库"}</h2></div><button type="button" onClick={onClose} aria-label="关闭"><X size={20} /></button></div>
-        <div className="provider-note">{provider === "github" ? <Github size={19} /> : <Gitlab size={19} />}<p>{provider === "github" ? "将图片与音乐写入该仓库。建议为每个主题创建独立仓库，例如 life-photos、favorite-music。" : "GitLab 仓库作为某个 GitHub 仓库的备份，上传时不会把新内容直接写入这里。"}</p></div>
+        <div className="provider-note">{provider === "github" ? <Github size={19} /> : <Gitlab size={19} />}<p>{provider === "github" ? "将图片与音乐写入该仓库。建议为每个主题创建独立仓库，例如 life-photos、favorite-music。" : "GitLab 仓库作为某个 GitHub 仓库的备份。主仓库有新文件时会自动写入这里，同名文件不会重复上传。"}</p></div>
         <div className="field-row">
-          <label className="field"><span>显示名称</span><input value={form.label} onChange={(event) => set("label", event.target.value)} placeholder={provider === "github" ? "生活影像" : "年度备份"} /></label>
+          <label className="field"><span>显示名称</span><input value={form.label} onChange={(event) => set("label", event.target.value)} placeholder={provider === "github" ? "生活影像" : "GitLab 备份"} /></label>
           <label className="field"><span>{provider === "github" ? "默认上传仓库" : "备份来源"}</span>
             {provider === "github" ? (
               <label className="switch-field"><input type="checkbox" checked={form.isDefault} onChange={(event) => set("isDefault", event.target.checked)} /><span />设为默认仓库</label>

@@ -219,9 +219,14 @@ export function AdminUpload({ repositories, onUploaded }: { repositories: Reposi
       if (detectedImageWidth) form.set("width", String(detectedImageWidth));
       if (detectedImageHeight) form.set("height", String(detectedImageHeight));
       if (duration) form.set("duration", String(duration));
-      await uploadAsset(form, setProgress);
+      const uploaded = await uploadAsset(form, setProgress);
+      const backups = uploaded.backups;
       setResult("success");
-      setMessage("作品已存入仓库，并出现在展示站中。");
+      setMessage(backups?.failures.length
+        ? `作品已存入主仓库，但 GitLab 备份失败：${backups.failures.map((item) => `${item.label} ${item.error}`).join("；")}`
+        : backups && (backups.synced || backups.skipped)
+          ? `作品已存入仓库，并完成 GitLab 备份（新增 ${backups.synced} 个，同名跳过 ${backups.skipped} 个）。`
+          : "作品已存入仓库，并出现在展示站中。");
       setMetadataStatus("");
       setFile(null);
       setPreview("");
@@ -320,7 +325,7 @@ export function AdminUpload({ repositories, onUploaded }: { repositories: Reposi
           <button className="button button--accent button--wide" type="submit" disabled={busy || optimizingImage || !file || !repoId}>
             {busy ? <><LoaderCircle className="spin" size={18} /> 正在上传 {progress}%</> : <><UploadCloud size={18} /> 上传到仓库</>}
           </button>
-          <p className="form-footnote">文件会统一以时间戳命名；静态图片会优先转换为 WebP，音乐会自动读取歌名、作者和专辑。GitLab 备份可在内容库中手动同步。</p>
+          <p className="form-footnote">文件会统一以时间戳命名；静态图片会优先转换为 WebP，音乐会自动读取歌名、作者和专辑。新文件会自动备份到绑定的 GitLab 仓库，同名文件会跳过。</p>
         </section>
       </form>
     </div>

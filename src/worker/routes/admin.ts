@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import type { AppEnv, AssetRow, RepositoryRow, ShareLinkRow } from "../types";
 import { getSettings, saveSettings } from "../lib/settings";
-import { assetJson, inferKind, mimeFor, removeAsset, safeFilename, syncAssetMirror, syncRepository, timestampFilename } from "../lib/media";
+import { assetJson, indexRepositoryFilenames, inferKind, mimeFor, removeAsset, safeFilename, syncAssetMirror, syncRepository, timestampFilename, type FilenameIndex } from "../lib/media";
 import { parseBuffer } from "music-metadata";
 import { testRepository, uploadFile } from "../lib/storage";
 import { decryptSecret, encryptSecret, nowIso, randomToken, sha256, uuid } from "../lib/crypto";
@@ -328,15 +328,33 @@ adminRoutes.post("/api/admin/assets", async (c) => {
     `INSERT INTO assets (id, kind, repo_id, path, filename, mime_type, size, remote_sha, title, artist, album, tags, width, height, duration_seconds, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(id, kind, repo.id, path, filename, mimeFor(filename, file.type), uploadedSize, result.sha, title, artist, album, JSON.stringify(tags), width, height, duration, now, now).run();
-  const backups = await c.env.DB.prepare("SELECT * FROM repositories WHERE backup_of = ? AND enabled = 1").bind(repo.id).all<RepositoryRow>();
-  for (const backup of backups.results) {
-    await c.env.DB.prepare("INSERT OR IGNORE INTO asset_mirrors (asset_id, repo_id, status) VALUES (?, ?, 'pending')").bind(id, backup.id).run();
-  }
   const asset = await c.env.DB.prepare(
     `SELECT a.*, r.label AS repo_label, r.provider AS repo_provider FROM assets a JOIN repositories r ON r.id = a.repo_id WHERE a.id = ?`
   ).bind(id).first<AssetRow & { repo_label: string; repo_provider: string }>();
-  await audit(c, "asset.upload", id, { title, kind, repoId: repo.id, size: uploadedSize, sourceSize: originalSize, optimizedFormat: kind === "image" && bytes.length < originalSize ? "webp" : null });
-  return c.json({ asset: asset ? assetJson(asset) : null }, 201);
+  const backups = await c.env.DB.prepare("SELECT * FROM repositories WHERE backup_of = ? AND enabled = 1").bind(repo.id).all<RepositoryRow>();
+  const backupResults: { repoId: string; label: string; ok: boolean; skipped?: boolean; error?: string }[] = [];
+  if (asset) {
+    for (const backup of backups.results) {
+      await c.env.DB.prepare("INSERT OR IGNORE INTO asset_mirrors (asset_id, repo_id, status) VALUES (?, ?, 'pending')").bind(id, backup.id).run();
+      const mirror = await syncAssetMirror(c.env, asset, backup, { bytes });
+      backupResults.push({ repoId: backup.id, label: backup.label, ...mirror });
+    }
+  }
+  const backupSummary = {
+    synced: backupResults.filter((item) => item.ok && !item.skipped).length,
+    skipped: backupResults.filter((item) => item.ok && item.skipped).length,
+    failures: backupResults.filter((item) => !item.ok).map((item) => ({ label: item.label, error: item.error ?? "备份失败" }))
+  };
+  const responseAsset = asset
+    ? await c.env.DB.prepare(
+        `SELECT a.*, r.label AS repo_label, r.provider AS repo_provider,
+           (SELECT COUNT(*) FROM asset_mirrors m WHERE m.asset_id = a.id AND m.status = 'synced') AS mirror_synced,
+           (SELECT COUNT(*) FROM asset_mirrors m WHERE m.asset_id = a.id AND m.status IN ('synced','pending')) AS mirror_total
+         FROM assets a JOIN repositories r ON r.id = a.repo_id WHERE a.id = ?`
+      ).bind(id).first<AssetRow & { repo_label: string; repo_provider: string; mirror_synced: number; mirror_total: number }>()
+    : null;
+  await audit(c, "asset.upload", id, { title, kind, repoId: repo.id, size: uploadedSize, sourceSize: originalSize, optimizedFormat: kind === "image" && bytes.length < originalSize ? "webp" : null, backups: backupResults.map((item) => ({ repoId: item.repoId, ok: item.ok, skipped: Boolean(item.skipped) })) });
+  return c.json({ asset: responseAsset ? assetJson(responseAsset) : null, backups: backupSummary }, 201);
 });
 
 adminRoutes.patch("/api/admin/assets/:id", async (c) => {
@@ -542,11 +560,21 @@ adminRoutes.post("/api/repos/:id/backup", async (c) => {
     .bind(source.id).first<{ count: number }>();
   const totalAssets = Number(total?.count ?? 0);
   let synced = 0;
+  let skipped = 0;
+  const filenameIndexes = new Map<string, FilenameIndex>();
+  for (const backup of backups.results) {
+    try {
+      filenameIndexes.set(backup.id, await indexRepositoryFilenames(backup, c.env));
+    } catch {
+      // Fall back to loading the index on demand so a transient tree error does not skip deduplication.
+    }
+  }
   const failures: { id: string; title: string; error: string }[] = [];
   for (const asset of assets.results) {
     for (const backup of backups.results) {
-      const result = await syncAssetMirror(c.env, asset, backup);
-      if (result.ok) synced += 1;
+      const result = await syncAssetMirror(c.env, asset, backup, { filenames: filenameIndexes.get(backup.id) });
+      if (result.ok && result.skipped) skipped += 1;
+      else if (result.ok) synced += 1;
       else failures.push({ id: asset.id, title: asset.title, error: result.error ?? "同步失败" });
     }
   }
@@ -560,6 +588,7 @@ adminRoutes.post("/api/repos/:id/backup", async (c) => {
   return c.json({
     total: totalAssets * backups.results.length,
     synced,
+    skipped,
     failures,
     processedAssets: assets.results.length,
     processed,

@@ -291,7 +291,7 @@ function AboutSection({ settings, images, music }: { settings: SiteSettings; ima
       </div>
       <div className="about-section__stack">
         <div className="about-card about-card--stat"><span className="eyebrow">THE COLLECTION</span><strong>{String(images + music).padStart(2, "0")}</strong><p>件被认真收藏的光影与声音</p><div><span>{images} 张影像</span><span>{music} 首音乐</span></div></div>
-        <div className="about-card about-card--tech"><span className="eyebrow">HOW IT WORKS</span><div className="about-route"><span>Cloudflare</span><i /><span>GitHub</span><i /><span>GitLab</span></div><p>页面部署在 Cloudflare Workers，原始文件安全存放在你自己的 GitHub 私有仓库，并可按年手动镜像到 GitLab。</p></div>
+        <div className="about-card about-card--tech"><span className="eyebrow">HOW IT WORKS</span><div className="about-route"><span>Cloudflare</span><i /><span>GitHub</span><i /><span>GitLab</span></div><p>页面部署在 Cloudflare Workers，原始文件安全存放在你自己的 GitHub 私有仓库，新文件会自动增量备份到 GitLab。</p></div>
       </div>
       <div className="about-quote"><span>“</span><blockquote>收藏不是囤积，<br />是对抗遗忘的一种温柔方式。</blockquote><span className="about-quote__mark">S</span></div>
     </div>

@@ -35,7 +35,16 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return parseResponse<T>(response);
 }
 
-export async function uploadAsset(form: FormData, onProgress?: (value: number) => void): Promise<{ asset: unknown }> {
+export type UploadResult = {
+  asset: unknown;
+  backups?: {
+    synced: number;
+    skipped: number;
+    failures: Array<{ label: string; error: string }>;
+  };
+};
+
+export async function uploadAsset(form: FormData, onProgress?: (value: number) => void): Promise<UploadResult> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/admin/assets");
@@ -47,7 +56,7 @@ export async function uploadAsset(form: FormData, onProgress?: (value: number) =
     xhr.onload = () => {
       let data: unknown = null;
       try { data = JSON.parse(xhr.responseText); } catch { data = null; }
-      if (xhr.status >= 200 && xhr.status < 300) resolve(data as { asset: unknown });
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data as UploadResult);
       else {
         const message = data && typeof data === "object" && "error" in data
           ? String((data as { error: unknown }).error)
